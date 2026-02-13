@@ -1,0 +1,9 @@
+venv/
+keys/
+__pycache__/
+*.pyc
+.env
+config.json
+tedee/
+cli.py
+requirements.txt

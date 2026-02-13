@@ -1,0 +1,61 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "Tedee Cloud API",
+                "description": "Introdu cheia ta personala de acces Tedee. O poti crea pe https://portal.tedee.com/ la sectiunea Personal Access Keys.",
+                "data": {
+                    "api_key": "Cheie de acces personala"
+                }
+            },
+            "select_lock": {
+                "title": "Selecteaza incuietoarea",
+                "description": "Alege incuietoarea pe care vrei sa o adaugi.",
+                "data": {
+                    "lock_selection": "Incuietoare"
+                }
+            },
+            "ble_address": {
+                "title": "Adresa BLE",
+                "description": "Scanarea automata nu a gasit incuietoarea {serial}. Asigura-te ca incuietoarea este aproape si activa (atinge-o), apoi introdu adresa MAC manual. O poti gasi in aplicatia Tedee la setarile incuietorii.",
+                "data": {
+                    "address": "Adresa MAC"
+                }
+            },
+            "register": {
+                "title": "Inregistrare",
+                "description": "Se genereaza cheile si se inregistreaza cu Tedee cloud..."
+            }
+        },
+        "error": {
+            "invalid_api_key": "Cheie API invalida. Verifica cheia de acces personala.",
+            "cannot_connect": "Nu s-a putut conecta la Tedee Cloud API.",
+            "no_locks_found": "Nu s-au gasit incuietori in contul tau Tedee.",
+            "invalid_mac": "Adresa MAC invalida. Foloseste formatul XX:XX:XX:XX:XX:XX.",
+            "scan_failed": "Scanarea Bluetooth nu a gasit incuietoarea. Asigura-te ca este aproape si activa. Introdu adresa manual mai jos.",
+            "registration_failed": "Inregistrarea cu Tedee cloud a esuat."
+        },
+        "abort": {
+            "all_locks_configured": "Toate incuietorile din acest cont sunt deja configurate.",
+            "already_configured": "Aceasta incuietoare este deja configurata.",
+            "registration_failed": "Inregistrarea cu Tedee cloud a esuat. Verifica jurnalele pentru detalii."
+        }
+    },
+    "entity": {
+        "lock": {
+            "lock": {
+                "name": "Incuietoare"
+            }
+        },
+        "binary_sensor": {
+            "door": {
+                "name": "Usa"
+            }
+        },
+        "sensor": {
+            "battery": {
+                "name": "Baterie"
+            }
+        }
+    }
+}

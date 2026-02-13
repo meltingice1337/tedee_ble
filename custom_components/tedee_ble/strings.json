@@ -1,0 +1,61 @@
+{
+    "config": {
+        "step": {
+            "user": {
+                "title": "Tedee Cloud API",
+                "description": "Enter your Tedee Personal Access Key. You can create one at https://portal.tedee.com/ under Personal Access Keys.",
+                "data": {
+                    "api_key": "Personal Access Key"
+                }
+            },
+            "select_lock": {
+                "title": "Select Lock",
+                "description": "Choose the lock you want to add.",
+                "data": {
+                    "lock_selection": "Lock"
+                }
+            },
+            "ble_address": {
+                "title": "BLE Address",
+                "description": "Automatic scan did not find lock {serial}. Make sure the lock is nearby and awake (touch it), then enter the MAC address manually. You can find it in the Tedee app under lock settings.",
+                "data": {
+                    "address": "MAC Address"
+                }
+            },
+            "register": {
+                "title": "Registering",
+                "description": "Generating keys and registering with Tedee cloud..."
+            }
+        },
+        "error": {
+            "invalid_api_key": "Invalid API key. Check your Personal Access Key.",
+            "cannot_connect": "Could not connect to Tedee Cloud API.",
+            "no_locks_found": "No locks found on your Tedee account.",
+            "invalid_mac": "Invalid MAC address. Use format XX:XX:XX:XX:XX:XX.",
+            "scan_failed": "Bluetooth scan did not find the lock. Make sure it is nearby and awake. Enter the address manually below.",
+            "registration_failed": "Registration with Tedee cloud failed."
+        },
+        "abort": {
+            "all_locks_configured": "All locks on this account are already configured.",
+            "already_configured": "This lock is already configured.",
+            "registration_failed": "Registration with Tedee cloud failed. Check the logs for details."
+        }
+    },
+    "entity": {
+        "lock": {
+            "lock": {
+                "name": "Lock"
+            }
+        },
+        "binary_sensor": {
+            "door": {
+                "name": "Door"
+            }
+        },
+        "sensor": {
+            "battery": {
+                "name": "Battery"
+            }
+        }
+    }
+}
