@@ -13,6 +13,7 @@ HMAC-SHA256 rather than the full TLS 1.3 HKDF key schedule:
   → next 12 bytes = AES-GCM-128 IV base
 """
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -86,6 +87,9 @@ class PTLSSession:
         self.device_key = device_private_key
         self.certificate = base64.b64decode(certificate_b64)
         self.device_pubkey = crypto.base64_to_public_key(device_public_key_b64)
+
+        # Lock to serialize decrypt operations (prevents counter desync)
+        self._crypto_lock = asyncio.Lock()
 
         # Handshake state
         self._transcript = hashlib.sha256()
@@ -365,12 +369,25 @@ class PTLSSession:
 
         nonce = crypto.make_nonce(self.send_iv, self.send_counter)
         ciphertext = crypto.aes_gcm_encrypt(self.send_key, nonce, plaintext)
+        logger.debug(
+            "Encrypt: counter=%d, plaintext_len=%d, ciphertext_len=%d",
+            self.send_counter, len(plaintext), len(ciphertext),
+        )
         self.send_counter += 1
 
         return bytes([DATA_ENCRYPTED]) + ciphertext
 
-    def decrypt(self, data: bytes) -> bytes:
-        """Decrypt a message from the lock."""
+    async def async_decrypt(self, data: bytes) -> bytes:
+        """Decrypt a message from the lock (async, serialized).
+
+        Uses a lock to ensure recv_counter stays in sync when notifications
+        and command responses arrive concurrently.
+        """
+        async with self._crypto_lock:
+            return self._decrypt_inner(data)
+
+    def _decrypt_inner(self, data: bytes) -> bytes:
+        """Inner decrypt logic (must be called under _crypto_lock)."""
         if not self.is_established:
             raise PTLSError("Session not established")
 
@@ -384,6 +401,10 @@ class PTLSSession:
 
         encrypted_data = data[1:]
         nonce = crypto.make_nonce(self.recv_iv, self.recv_counter)
+        logger.debug(
+            "Decrypt: counter=%d, encrypted_len=%d, header=0x%02x",
+            self.recv_counter, len(encrypted_data), data[0],
+        )
         plaintext = crypto.aes_gcm_decrypt(self.recv_key, nonce, encrypted_data)
         self.recv_counter += 1
 

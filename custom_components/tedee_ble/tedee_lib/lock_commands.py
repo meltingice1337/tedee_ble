@@ -4,6 +4,7 @@ Provides operations like unlock, lock, get state, get battery, and set signed ti
 All commands are sent encrypted via the PTLS session over BLE.
 """
 
+import asyncio
 import base64
 import logging
 import struct
@@ -132,11 +133,13 @@ class TedeeLock:
 
     async def _send_command(self, command: bytes, timeout: float = 10.0) -> bytes:
         """Send an encrypted command and receive the response."""
+        logger.debug("Sending command: opcode=0x%02x, len=%d", command[0], len(command))
         encrypted = self.session.encrypt(command)
         await self.transport.write_api_command(encrypted)
 
         response = await self.transport.read_api_command(timeout=timeout)
-        decrypted = self.session.decrypt(response)
+        logger.debug("Received response: len=%d, header=0x%02x", len(response), response[0])
+        decrypted = await self.session.async_decrypt(response)
         logger.debug("Command response raw: %s", decrypted.hex())
 
         # Response format: [opcode] [result_code] [data...]
@@ -218,14 +221,17 @@ class TedeeLock:
 
     async def drain_pending_notifications(self) -> None:
         """Drain any pending notifications after connect."""
-        import asyncio
         await asyncio.sleep(0.3)
+        drained = 0
         while True:
             try:
                 data = await self.transport.read_notification(timeout=0.3)
-                self.parse_notification(data)
+                await self.parse_notification(data)
+                drained += 1
             except asyncio.TimeoutError:
                 break
+        if drained:
+            logger.debug("Drained %d pending notifications", drained)
 
     async def get_battery(self) -> tuple[int, bool]:
         """Get battery level and charging status."""
@@ -243,16 +249,17 @@ class TedeeLock:
         logger.info("Battery: %d%%, Charging: %s", level, is_charging)
         return level, is_charging
 
-    def parse_notification(self, data: bytes) -> dict | None:
+    async def parse_notification(self, data: bytes) -> dict | None:
         """Parse a notification from the lock.
 
         Returns:
             Parsed notification dict, or None if unknown type
         """
         header = data[0] & 0x0F
+        logger.debug("Parsing notification: len=%d, header=0x%02x", len(data), header)
         if header == 0x01:  # DATA_ENCRYPTED
             try:
-                data = self.session.decrypt(data)
+                data = await self.session.async_decrypt(data)
             except Exception as e:
                 logger.warning("Failed to decrypt notification: %s", e)
                 return None

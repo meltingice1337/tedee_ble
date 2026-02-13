@@ -7,6 +7,12 @@ from typing import Callable
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 
+try:
+    from bleak_retry_connector import establish_connection
+    HAS_RETRY_CONNECTOR = True
+except ImportError:
+    HAS_RETRY_CONNECTOR = False
+
 logger = logging.getLogger(__name__)
 
 # Tedee Lock BLE Service
@@ -63,11 +69,23 @@ class TedeeBLETransport:
     async def connect(self) -> None:
         """Connect to the lock and subscribe to notifications."""
         logger.info("Connecting to %s...", self._device)
-        self._client = BleakClient(
-            self._device,
-            disconnected_callback=self._on_disconnect,
-        )
-        await self._client.connect()
+
+        if HAS_RETRY_CONNECTOR and isinstance(self._device, BLEDevice):
+            self._client = await establish_connection(
+                BleakClient,
+                self._device,
+                self._device.name or self._device.address,
+                disconnected_callback=self._on_disconnect,
+            )
+            logger.debug("Connected via bleak-retry-connector")
+        else:
+            self._client = BleakClient(
+                self._device,
+                disconnected_callback=self._on_disconnect,
+            )
+            await self._client.connect()
+            logger.debug("Connected via direct BleakClient")
+
         self._mtu = self._client.mtu_size
         logger.info("Connected (MTU: %d)", self._mtu)
 
@@ -92,12 +110,12 @@ class TedeeBLETransport:
 
     def _on_notification(self, _sender: int, data: bytearray) -> None:
         """Handle Notification characteristic data."""
-        logger.debug("Notification: %s", data.hex())
+        logger.debug("Notification received: len=%d, data=%s", len(data), data.hex())
         self._notification_queue.put_nowait(bytes(data))
 
     def _on_api_command(self, _sender: int, data: bytearray) -> None:
         """Handle API Commands indication (lock -> client)."""
-        logger.debug("API Command response: %s", data.hex())
+        logger.debug("API Command response received: len=%d, data=%s", len(data), data.hex())
         self._api_command_queue.put_nowait(bytes(data))
 
     async def write_ptls_rx(self, data: bytes) -> None:

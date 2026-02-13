@@ -17,6 +17,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
+from homeassistant.components.bluetooth import async_ble_device_from_address
+
 from .const import (
     CERT_CHECK_INTERVAL_SECONDS,
     CONF_ADDRESS,
@@ -150,6 +152,15 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         await self._disconnect()
         await super().async_shutdown()
 
+    def _resolve_ble_device(self, address: str) -> object:
+        """Resolve BLEDevice from HA Bluetooth stack, fall back to address string."""
+        ble_device = async_ble_device_from_address(self.hass, address, connectable=True)
+        if ble_device:
+            logger.debug("Resolved BLEDevice: %s", ble_device.name)
+        else:
+            logger.debug("BLEDevice not found, using address string")
+        return ble_device or address
+
     async def _connect(self) -> None:
         """Full connection sequence: cert refresh → BLE → PTLS → init."""
         async with self._connecting_lock:
@@ -165,7 +176,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
             # Create BLE transport
             self._transport = TedeeBLETransport(
-                data[CONF_ADDRESS],
+                self._resolve_ble_device(data[CONF_ADDRESS]),
                 disconnect_callback=self._on_disconnect,
             )
             await self._transport.connect()
@@ -189,7 +200,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     await self._refresh_signed_time()
                     data = self.entry.data  # re-read after update
                     self._transport = TedeeBLETransport(
-                        data[CONF_ADDRESS],
+                        self._resolve_ble_device(data[CONF_ADDRESS]),
                         disconnect_callback=self._on_disconnect,
                     )
                     await self._transport.connect()
@@ -207,7 +218,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     await self._refresh_signed_time()
                     data = self.entry.data
                     self._transport = TedeeBLETransport(
-                        data[CONF_ADDRESS],
+                        self._resolve_ble_device(data[CONF_ADDRESS]),
                         disconnect_callback=self._on_disconnect,
                     )
                     await self._transport.connect()
@@ -372,7 +383,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 if self._lock is None:
                     continue
 
-                notification = self._lock.parse_notification(data)
+                notification = await self._lock.parse_notification(data)
                 if notification is None:
                     continue
 
@@ -393,6 +404,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                         self.state.door_state = notification["door_state"]
                     self.async_set_updated_data(self.state)
 
+
                 elif notification["type"] == "need_datetime":
                     logger.info("Lock %s requests time sync", self.lock_name)
                     try:
@@ -401,7 +413,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                             await self._lock.set_signed_time(
                                 self.entry.data[CONF_SIGNED_TIME]
                             )
-                        last_activity = time.monotonic()
+                        self._last_ble_activity = time.monotonic()
                     except Exception:
                         logger.warning("Failed to sync time", exc_info=True)
 
