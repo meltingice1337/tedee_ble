@@ -401,7 +401,11 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     access_id = notification.get("access_id", 0)
                     if access_id:
                         user_map = self.entry.data.get(CONF_USER_MAP, {})
-                        self.state.last_user = user_map.get(str(access_id), str(access_id))
+                        username = user_map.get(str(access_id))
+                        if username is None:
+                            # Unknown user - refresh map from cloud
+                            username = await self._resolve_unknown_user(access_id)
+                        self.state.last_user = username
                     else:
                         self.state.last_user = ""
                     if notification["door_state"] != DOOR_STATE_UNKNOWN:
@@ -523,19 +527,37 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         await self._force_refresh_certificate()
 
     async def _force_refresh_certificate(self) -> None:
-        """Force refresh the certificate from cloud API."""
+        """Force refresh the certificate and user map from cloud API."""
         data = self.entry.data
         logger.info("Refreshing certificate for %s...", self.lock_name)
         async with TedeeCloudAPI(data[CONF_API_KEY]) as api:
             cert_data = await api.get_device_certificate(
                 data[CONF_MOBILE_ID], data[CONF_DEVICE_ID]
             )
+            user_map = await api.get_user_map(data[CONF_DEVICE_ID])
         new_data = {**data}
         new_data[CONF_CERTIFICATE] = cert_data["certificate"]
         new_data[CONF_CERT_EXPIRATION] = cert_data["expirationDate"]
         new_data[CONF_DEVICE_PUBLIC_KEY] = cert_data["devicePublicKey"]
+        new_data[CONF_USER_MAP] = {str(k): v for k, v in user_map.items()}
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
         logger.info("Certificate refreshed, expires %s", cert_data["expirationDate"])
+
+    async def _resolve_unknown_user(self, access_id: int) -> str:
+        """Refresh user map from cloud when an unknown access_id is seen."""
+        data = self.entry.data
+        try:
+            async with TedeeCloudAPI(data[CONF_API_KEY]) as api:
+                user_map = await api.get_user_map(data[CONF_DEVICE_ID])
+            new_map = {str(k): v for k, v in user_map.items()}
+            new_data = {**data}
+            new_data[CONF_USER_MAP] = new_map
+            self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+            logger.debug("User map refreshed, now has %d users", len(new_map))
+            return new_map.get(str(access_id), str(access_id))
+        except Exception:
+            logger.debug("Failed to refresh user map for access_id %d", access_id)
+            return str(access_id)
 
     async def _refresh_signed_time(self) -> None:
         """Refresh signed time from cloud API."""
