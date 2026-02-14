@@ -7,9 +7,17 @@
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=meltingice1337&repository=tedee_ble&category=integration)
 
-Control your **Tedee GO 2** (aluminium or plastic) smart lock over **Bluetooth Low Energy** directly from Home Assistant. **No Tedee bridge required.** Other Tedee locks (GO, PRO) may work but are untested.
+Control your Tedee smart lock over **Bluetooth Low Energy** directly from Home Assistant.
 
-This integration communicates with the lock directly over BLE using an encrypted session - your Home Assistant device talks to the lock without needing a Tedee bridge. It supports both **direct Bluetooth** connections and **ESPHome Bluetooth Proxy**, so you can place an ESP32 near the lock to extend range if needed.
+**What you need:**
+- **Home Assistant 2024.1.0** or newer
+- A **Tedee GO 2** lock (aluminium or plastic) - other models (GO, PRO) may work but are untested
+- A **Bluetooth adapter** on your Home Assistant host (built-in or USB dongle), **or** an **[ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/)** (ESP32) within BLE range of the lock (~10m, varies by environment)
+- A free **Tedee Personal Access Key** from the [Tedee Portal](https://portal.tedee.com) (used during setup for certificate registration)
+
+**What you don't need:**
+- A **Tedee Bridge** - the integration talks directly to the lock over BLE
+- A **permanent cloud connection** - after initial setup, all lock commands happen locally. The cloud is only contacted every few days to refresh certificates
 
 ## Features
 
@@ -23,7 +31,6 @@ This integration communicates with the lock directly over BLE using an encrypted
 - **Persistent connection with auto-reconnect** - The integration maintains a live BLE connection and automatically reconnects if it drops
 - **Direct BLE and ESPHome Bluetooth Proxy** - Connect directly from your Home Assistant host's Bluetooth adapter, or route through an [ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/) for extended range
 - **Custom Lovelace card** - A built-in dashboard card with animated status icons, smart action buttons, and at-a-glance info
-- **Fully local control** - After initial setup, all commands happen over local BLE. The cloud API is only contacted periodically to refresh certificates
 
 ## Why does it need a Cloud API key?
 
@@ -103,7 +110,7 @@ The integration creates the following entities per lock, all grouped under a sin
 
 ### Configuration options
 
-After setup, go to the integration's **Configure** button to adjust:
+After setup, click the **Configure** button on the integration to adjust:
 
 - **Auto-pull on unlock** - When enabled, unlocking the lock will also automatically pull the spring to unlatch the door. When disabled, unlock and open are separate actions.
 
@@ -132,7 +139,7 @@ name: Front Door                    # optional, overrides entity name
 - Animated icon (pulse during locking/unlocking, shake when jammed)
 - Smart buttons - only shows actions that make sense (e.g. "Open" only appears when unlocked)
 - Click lock icon/name to open more-info dialog, click door/battery chips to open their respective dialogs
-- Shows last user and trigger source (manual, remote, auto-lock, etc.)
+- Shows last user and trigger source (button press, remote command, auto-lock, door sensor)
 
 ## Installation
 
@@ -155,16 +162,8 @@ name: Front Door                    # optional, overrides entity name
 2. Search for **Tedee BLE**
 3. Enter your Tedee Personal Access Key
 4. Select your lock from the list
-5. The integration will scan for the lock over BLE (make sure your HA device has Bluetooth and is in range)
+5. The integration will scan for the lock over BLE - make sure your HA host has Bluetooth (or an ESPHome proxy) and is in range
 6. If the scan doesn't find it, you can enter the BLE MAC address manually
-
-## Requirements
-
-- Home Assistant 2024.1.0 or newer
-- Bluetooth adapter on the Home Assistant host (built-in or USB dongle), **or** an [ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/) within range of the lock
-- Tedee GO 2 lock (aluminium or plastic version) - other Tedee locks (GO, PRO) may work but are untested
-- Tedee Personal Access Key (free, from the Tedee Portal)
-- The HA host (or ESPHome proxy) must be within BLE range of the lock (~10m, varies by environment)
 
 ## Troubleshooting
 
@@ -181,6 +180,28 @@ name: Front Door                    # optional, overrides entity name
 
 ### Certificate errors
 - The integration auto-refreshes certificates. If you see persistent errors, remove and re-add the integration
+
+### Activity tracking (last user / last trigger)
+- The lock entity exposes `last_trigger` and `last_user` attributes showing what caused the most recent state change
+- **last_trigger** tells you *how* - button press (physical button on the lock), remote (BLE command from HA or phone), auto-lock (the lock's built-in timer), or door sensor (triggered by opening/closing the door)
+- **last_user** tells you *who* - the integration reads activity logs from the Tedee Cloud API during setup to build a mapping of user IDs to names. When the lock notifies about a state change, it includes a user ID that gets resolved to a name
+- If the user map is outdated (e.g. you shared access with someone new), remove and re-add the integration to refresh it
+
+### Reporting an issue
+
+If you run into a problem, please [open an issue](https://github.com/meltingice1337/tedee_ble/issues) and include the following information:
+
+1. **Lock model and firmware version** (e.g. Tedee GO 2, firmware 2.4.18050)
+2. **Connection type** - direct Bluetooth or ESPHome Bluetooth Proxy (and if proxy, the ESP32 board model)
+3. **Debug logs** - enable debug logging for the integration by adding this to your `configuration.yaml` and restarting:
+   ```yaml
+   logger:
+     default: info
+     logs:
+       custom_components.tedee_ble: debug
+   ```
+   Then reproduce the issue and include the relevant log output from **Settings > System > Logs**.
+4. **Steps to reproduce** - what you did before the issue occurred
 
 ## License
 
