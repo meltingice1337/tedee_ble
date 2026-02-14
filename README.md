@@ -9,7 +9,21 @@
 
 Control your **Tedee GO 2** (aluminium or plastic) smart lock over **Bluetooth Low Energy** directly from Home Assistant. **No Tedee bridge required.** Other Tedee locks (GO, PRO) may work but are untested.
 
-This integration uses Tedee's official Cloud API for device registration and certificate management, and communicates with the lock directly over BLE using an encrypted session. Your Home Assistant device talks to the lock without needing a Tedee bridge.
+This integration communicates with the lock directly over BLE using an encrypted session - your Home Assistant device talks to the lock without needing a Tedee bridge. It supports both **direct Bluetooth** connections and **ESPHome Bluetooth Proxy**, so you can place an ESP32 near the lock to extend range if needed.
+
+## Features
+
+- **Lock, Unlock, and Open** - Full lock control including pull spring (open latch) support
+- **Auto-pull on unlock** - Optional setting to automatically pull the spring when unlocking, so the door unlatches in one step
+- **Door open/closed sensor** - If your Tedee lock has the optional **door sensor** accessory installed, the integration exposes a binary sensor showing whether the door is open or closed
+- **Battery monitoring** - See the current battery level and whether the lock is charging
+- **Real-time state updates** - Lock state changes (locked, unlocked, jammed, door opened) are pushed instantly via BLE notifications, no polling needed
+- **Jam detection** - The lock reports if it gets jammed during locking or unlocking
+- **Activity tracking** - See who triggered the last action (which user) and how it was triggered (button press, remote command, auto-lock, or door sensor)
+- **Persistent connection with auto-reconnect** - The integration maintains a live BLE connection and automatically reconnects if it drops
+- **Direct BLE and ESPHome Bluetooth Proxy** - Connect directly from your Home Assistant host's Bluetooth adapter, or route through an [ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/) for extended range
+- **Custom Lovelace card** - A built-in dashboard card with animated status icons, smart action buttons, and at-a-glance info
+- **Fully local control** - After initial setup, all commands happen over local BLE. The cloud API is only contacted periodically to refresh certificates
 
 ## Why does it need a Cloud API key?
 
@@ -36,6 +50,8 @@ After setup, **all lock commands (lock, unlock, open) happen locally over BLE** 
 
 ## How it works
 
+**Direct BLE connection:**
+
 ```
 ┌─────────────┐      BLE       ┌──────────────┐
 │   Home      │◄──────────────►│  Tedee Lock  │
@@ -51,8 +67,25 @@ After setup, **all lock commands (lock, unlock, open) happen locally over BLE** 
 └─────────────┘
 ```
 
+**Via ESPHome Bluetooth Proxy:**
+
+```
+┌─────────────┐    Wi-Fi     ┌──────────────┐     BLE      ┌──────────────┐
+│   Home      │◄────────────►│   ESPHome    │◄────────────►│  Tedee Lock  │
+│   Assistant │              │  BLE Proxy   │  Encrypted   │  (GO 2)      │
+└──────┬──────┘              │  (ESP32)     │              └──────────────┘
+       │                     └──────────────┘
+       │ HTTPS (certificate refresh only,
+       │        every few days)
+       │
+┌──────▼──────┐
+│ Tedee Cloud │
+│    API      │
+└─────────────┘
+```
+
 1. **Device Registration** - The integration registers with Tedee's Cloud API and obtains a signed certificate for BLE authentication
-2. **BLE Discovery** - The integration scans for your lock over Bluetooth
+2. **BLE Discovery** - The integration scans for your lock over Bluetooth (directly or through an ESPHome proxy)
 3. **Encrypted Session** - A secure, encrypted BLE session is established using the certificate from Tedee's cloud
 4. **Persistent Connection** - The integration maintains a persistent BLE connection with keep-alive pings (the lock disconnects after a period of inactivity)
 5. **Real-time Notifications** - Lock state changes (locked, unlocked, door opened, jammed) are pushed instantly via BLE notifications - no polling needed
@@ -60,13 +93,19 @@ After setup, **all lock commands (lock, unlock, open) happen locally over BLE** 
 
 ## Entities
 
-The integration creates three entities per lock, all grouped under a single device:
+The integration creates the following entities per lock, all grouped under a single device:
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| **Lock** | `lock` | Lock/unlock/open (pull spring). Shows locking, unlocking, jammed states. Attributes include `last_trigger` and `last_user`. |
-| **Door** | `binary_sensor` | Door open/closed state from the built-in door sensor |
+| **Lock** | `lock` | Lock, unlock, and open (pull spring). Shows locking, unlocking, and jammed states. Attributes include `last_trigger` (button, remote, auto-lock, door sensor) and `last_user` (who triggered the action). |
+| **Door** | `binary_sensor` | Door open/closed state. Requires the optional **Tedee door sensor** accessory to be installed on the lock. |
 | **Battery** | `sensor` | Battery percentage and charging status |
+
+### Configuration options
+
+After setup, go to the integration's **Configure** button to adjust:
+
+- **Auto-pull on unlock** - When enabled, unlocking the lock will also automatically pull the spring to unlatch the door. When disabled, unlock and open are separate actions.
 
 ## Custom Lovelace Card
 
@@ -122,11 +161,10 @@ name: Front Door                    # optional, overrides entity name
 ## Requirements
 
 - Home Assistant 2024.1.0 or newer
-- Bluetooth adapter on the Home Assistant host (built-in or USB dongle)
-- Tedee GO 2 lock (aluminium or plastic version)
-- Other Tedee locks (GO, PRO) may work but are untested
+- Bluetooth adapter on the Home Assistant host (built-in or USB dongle), **or** an [ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/) within range of the lock
+- Tedee GO 2 lock (aluminium or plastic version) - other Tedee locks (GO, PRO) may work but are untested
 - Tedee Personal Access Key (free, from the Tedee Portal)
-- The HA host must be within BLE range of the lock (~10m, varies by environment)
+- The HA host (or ESPHome proxy) must be within BLE range of the lock (~10m, varies by environment)
 
 ## Troubleshooting
 
@@ -137,7 +175,7 @@ name: Front Door                    # optional, overrides entity name
 - You can enter the MAC address manually if the scan fails
 
 ### Frequent disconnections
-- BLE range issues - move the HA host closer
+- BLE range issues - move the HA host closer, or use an [ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/) placed near the lock
 - Interference from other 2.4GHz devices (Wi-Fi, Zigbee)
 - The integration will reconnect automatically
 
