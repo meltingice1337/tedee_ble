@@ -119,7 +119,7 @@ After setup, click the **Configure** button on the integration to adjust:
 The integration ships with a built-in **Tedee Lock Card** that shows everything in a single compact row:
 
 <p>
-  <img src="https://raw.githubusercontent.com/meltingice1337/tedee_ble/master/custom_card.png" alt="Tedee Lock Card">
+  <img src="https://raw.githubusercontent.com/meltingice1337/tedee_ble/master/custom_card2.png" alt="Tedee Lock Card">
 </p>
 
 The card is **auto-registered** on startup - no need to add it as a resource manually.
