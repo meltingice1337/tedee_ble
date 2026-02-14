@@ -14,7 +14,15 @@ CONF_CERTIFICATE = "certificate"
 CONF_CERT_EXPIRATION = "cert_expiration"
 CONF_DEVICE_PUBLIC_KEY = "device_public_key"
 CONF_SIGNED_TIME = "signed_time"
+CONF_LOCK_MODEL = "lock_model"
 CONF_USER_MAP = "user_map"  # {userId: username} from activity logs
+
+# Tedee API device type → model name
+DEVICE_TYPE_MODELS = {
+    2: "PRO",
+    4: "GO",
+    # 1=Bridge, 3=Keypad, 5=Gate, 6=DryContact, 8=Door Sensor, 10=Keypad PRO
+}
 
 # Coordinator
 RECONNECT_DELAYS = [2, 5, 10, 30, 60]

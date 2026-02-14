@@ -17,12 +17,14 @@ from .const import (
     CONF_CERTIFICATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_PUBLIC_KEY,
+    CONF_LOCK_MODEL,
     CONF_LOCK_NAME,
     CONF_MOBILE_ID,
     CONF_PRIVATE_KEY_PEM,
     CONF_SERIAL,
     CONF_SIGNED_TIME,
     CONF_USER_MAP,
+    DEVICE_TYPE_MODELS,
     DOMAIN,
 )
 from .tedee_lib.ble import serial_to_service_uuid
@@ -189,6 +191,7 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
         device_id = lock["id"]
         serial = lock.get("serialNumber", "")
         lock_name = lock.get("name", "Lock")
+        lock_model = DEVICE_TYPE_MODELS.get(lock.get("type"), "Lock")
 
         try:
             # Generate ECDSA P-256 key pair
@@ -220,6 +223,7 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_ADDRESS: self._address,
                 CONF_SERIAL: serial,
                 CONF_LOCK_NAME: lock_name,
+                CONF_LOCK_MODEL: lock_model,
                 CONF_MOBILE_ID: mobile_id,
                 CONF_PRIVATE_KEY_PEM: private_key_pem,
                 CONF_CERTIFICATE: cert_data["certificate"],

@@ -12,7 +12,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_DEVICE_ID, CONF_LOCK_NAME, CONF_SERIAL, DOMAIN
+from .const import CONF_DEVICE_ID, CONF_LOCK_MODEL, CONF_LOCK_NAME, CONF_SERIAL, DOMAIN
 from .coordinator import TedeeCoordinator
 from .tedee_lib.lock_commands import (
     LOCK_STATE_LOCKED,
@@ -49,7 +49,7 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
             identifiers={(DOMAIN, str(entry.data[CONF_DEVICE_ID]))},
             name=entry.data.get(CONF_LOCK_NAME, "Tedee Lock"),
             manufacturer="Tedee",
-            model="GO 2",
+            model=entry.data.get(CONF_LOCK_MODEL, "Lock"),
             serial_number=entry.data.get(CONF_SERIAL),
         )
 

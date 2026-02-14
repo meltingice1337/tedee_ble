@@ -164,13 +164,14 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
     async def _connect(self) -> None:
         """Full connection sequence: cert refresh → BLE → PTLS → init."""
         async with self._connecting_lock:
+            if self.is_connected:
+                logger.debug("Already connected to %s, skipping", self.lock_name)
+                return
+
             logger.info("Connecting to %s (%s)...", self.lock_name, self.entry.data[CONF_ADDRESS])
 
             # Refresh certificate if needed
             await self._refresh_certificate_if_needed()
-
-            # Always refresh signed time before connecting
-            await self._refresh_signed_time()
 
             data = self.entry.data
 
@@ -190,6 +191,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 data[CONF_DEVICE_PUBLIC_KEY],
             )
 
+            _needs_signed_time = False
             try:
                 await self._session.handshake()
             except PTLSAlertError as err:
@@ -197,7 +199,6 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     logger.warning("Certificate rejected, forcing refresh...")
                     await self._transport.disconnect()
                     await self._force_refresh_certificate()
-                    await self._refresh_signed_time()
                     data = self.entry.data  # re-read after update
                     self._transport = TedeeBLETransport(
                         self._resolve_ble_device(data[CONF_ADDRESS]),
@@ -213,7 +214,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     )
                     await self._session.handshake()
                 elif err.code == ALERT_NO_TRUSTED_TIME:
-                    logger.warning("Lock has no trusted time, refreshing...")
+                    logger.warning("Lock has no trusted time, fetching and retrying...")
                     await self._transport.disconnect()
                     await self._refresh_signed_time()
                     data = self.entry.data
@@ -230,6 +231,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                         data[CONF_DEVICE_PUBLIC_KEY],
                     )
                     await self._session.handshake()
+                    _needs_signed_time = True
                 else:
                     raise
 
@@ -240,8 +242,9 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 initial_door_state=self.state.door_state,
             )
 
-            # Set signed time on lock
-            await self._lock.set_signed_time(data[CONF_SIGNED_TIME])
+            # Only set signed time when the lock requested it
+            if _needs_signed_time:
+                await self._lock.set_signed_time(data[CONF_SIGNED_TIME])
 
             # Drain stale notifications
             await self._lock.drain_pending_notifications()
@@ -432,8 +435,11 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             except Exception:
                 logger.warning("Certificate check failed", exc_info=True)
 
-        # If not connected, try reconnecting
+        # If not connected, try reconnecting (but skip if reconnect already in progress)
         if not self.is_connected:
+            if self._reconnect_task and not self._reconnect_task.done():
+                logger.debug("Reconnect already in progress, skipping poll reconnect")
+                return self.state
             try:
                 await self._disconnect()
                 await self._connect()
