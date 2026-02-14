@@ -185,7 +185,7 @@ name: Front Door                    # optional, overrides entity name
 - The lock entity exposes `last_trigger` and `last_user` attributes showing what caused the most recent state change
 - **last_trigger** tells you *how* - button press (physical button on the lock), remote (BLE command from HA or phone), auto-lock (the lock's built-in timer), or door sensor (triggered by opening/closing the door)
 - **last_user** tells you *who* - the integration reads activity logs from the Tedee Cloud API during setup to build a mapping of user IDs to names. When the lock notifies about a state change, it includes a user ID that gets resolved to a name
-- If the user map is outdated (e.g. you shared access with someone new), remove and re-add the integration to refresh it
+- The user map is automatically refreshed during periodic certificate renewals and whenever an unknown user is detected, so new shares are picked up without any manual action
 
 ### Reporting an issue
 
@@ -202,6 +202,25 @@ If you run into a problem, please [open an issue](https://github.com/meltingice1
    ```
    Then reproduce the issue and include the relevant log output from **Settings > System > Logs**.
 4. **Steps to reproduce** - what you did before the issue occurred
+
+## CLI tool
+
+The repo includes a standalone `cli.py` for testing and debugging the BLE connection outside of Home Assistant. It uses the same underlying library as the integration and supports both direct Bluetooth and ESPHome proxy.
+
+```bash
+python cli.py scan                           # Find Tedee locks nearby
+python cli.py register                       # One-time: generate keys and register with Tedee cloud
+python cli.py status                         # Get lock state and battery
+python cli.py lock                           # Lock the door
+python cli.py unlock [--force] [--pull]      # Unlock (--pull to also pull spring)
+python cli.py pull                           # Pull spring only
+python cli.py info [--raw]                   # Show lock model, serial, firmware from cloud
+python cli.py shell                          # Interactive session with persistent connection
+
+# Via ESPHome Bluetooth Proxy
+python cli.py --proxy 192.168.1.50 scan
+python cli.py --proxy 192.168.1.50 shell
+```
 
 ## License
 
