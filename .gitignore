@@ -5,5 +5,5 @@ __pycache__/
 .env
 config.json
 tedee/
-cli.py
-requirements.txt
+# cli.py
+# requirements.txt

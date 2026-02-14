@@ -131,6 +131,7 @@ class TedeeLock:
         self.transport = transport
         self.session = session
         self.door_state: int = initial_door_state
+        self._consecutive_decrypt_failures: int = 0
 
     async def _send_command(self, command: bytes, timeout: float = 10.0) -> bytes:
         """Send an encrypted command and receive the response."""
@@ -262,8 +263,16 @@ class TedeeLock:
         if header == 0x01:  # DATA_ENCRYPTED
             try:
                 data = await self.session.async_decrypt(data)
+                self._consecutive_decrypt_failures = 0
             except Exception as e:
-                logger.warning("Failed to decrypt notification: %s", e)
+                self._consecutive_decrypt_failures += 1
+                if self._consecutive_decrypt_failures >= 3:
+                    logger.error(
+                        "3 consecutive decrypt failures — re-raising to trigger reconnect: %s", e
+                    )
+                    raise
+                logger.warning("Failed to decrypt notification (%d/3): %s",
+                               self._consecutive_decrypt_failures, e)
                 return None
         elif header == 0x00:  # DATA_NOT_ENCRYPTED
             data = data[1:]

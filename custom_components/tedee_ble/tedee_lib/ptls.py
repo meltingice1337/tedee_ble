@@ -21,6 +21,7 @@ import os
 import struct
 import time
 
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.asymmetric import ec
 
 from . import crypto
@@ -90,6 +91,8 @@ class PTLSSession:
 
         # Lock to serialize decrypt operations (prevents counter desync)
         self._crypto_lock = asyncio.Lock()
+        # Counters skipped during out-of-order recovery (capped at 10)
+        self._missed_counters: list[int] = []
 
         # Handshake state
         self._transcript = hashlib.sha256()
@@ -404,7 +407,12 @@ class PTLSSession:
             return self._decrypt_inner(data)
 
     def _decrypt_inner(self, data: bytes) -> bytes:
-        """Inner decrypt logic (must be called under _crypto_lock)."""
+        """Inner decrypt logic (must be called under _crypto_lock).
+
+        Handles out-of-order message delivery (common with BT proxies) by
+        trying missed counters from previous recoveries, then the current
+        counter, then skip-ahead up to 5 positions.
+        """
         if not self.is_established:
             raise PTLSError("Session not established")
 
@@ -417,12 +425,59 @@ class PTLSSession:
             raise PTLSError(f"Unexpected header: 0x{header:02x}")
 
         encrypted_data = data[1:]
+
+        # 1) Try previously missed counters (from earlier out-of-order recoveries)
+        for missed in list(self._missed_counters):
+            nonce = crypto.make_nonce(self.recv_iv, missed)
+            try:
+                plaintext = crypto.aes_gcm_decrypt(self.recv_key, nonce, encrypted_data)
+                self._missed_counters.remove(missed)
+                logger.warning(
+                    "Counter desync recovered: used missed counter %d "
+                    "(current=%d, missed_remaining=%s)",
+                    missed, self.recv_counter, self._missed_counters,
+                )
+                return plaintext
+            except InvalidTag:
+                continue
+
+        # 2) Try current counter (normal happy path)
         nonce = crypto.make_nonce(self.recv_iv, self.recv_counter)
         logger.debug(
             "Decrypt: counter=%d, encrypted_len=%d, header=0x%02x",
             self.recv_counter, len(encrypted_data), data[0],
         )
-        plaintext = crypto.aes_gcm_decrypt(self.recv_key, nonce, encrypted_data)
-        self.recv_counter += 1
+        try:
+            plaintext = crypto.aes_gcm_decrypt(self.recv_key, nonce, encrypted_data)
+            self.recv_counter += 1
+            return plaintext
+        except InvalidTag:
+            pass
 
-        return plaintext
+        # 3) Skip-ahead: try counter+1 through counter+5
+        for offset in range(1, 6):
+            skip_counter = self.recv_counter + offset
+            nonce = crypto.make_nonce(self.recv_iv, skip_counter)
+            try:
+                plaintext = crypto.aes_gcm_decrypt(self.recv_key, nonce, encrypted_data)
+                # Record skipped counters as missed
+                for skipped in range(self.recv_counter, skip_counter):
+                    if skipped not in self._missed_counters:
+                        self._missed_counters.append(skipped)
+                # Cap missed list to prevent unbounded growth
+                self._missed_counters = self._missed_counters[-10:]
+                logger.warning(
+                    "Counter desync recovered: skipped ahead to counter %d "
+                    "(expected=%d, missed=%s)",
+                    skip_counter, self.recv_counter, self._missed_counters,
+                )
+                self.recv_counter = skip_counter + 1
+                return plaintext
+            except InvalidTag:
+                continue
+
+        # 4) All attempts exhausted
+        raise PTLSError(
+            f"Decrypt failed: counter desync unrecoverable "
+            f"(counter={self.recv_counter}, missed={self._missed_counters})"
+        )
