@@ -5,7 +5,7 @@
  * last trigger / user, and Lock / Unlock / Open action buttons.
  */
 
-const CARD_VERSION = "1.0.3";
+const CARD_VERSION = "1.3.1";
 
 class TedeeLockCard extends HTMLElement {
   /* ── lifecycle ─────────────────────────────────────────────── */
@@ -28,6 +28,7 @@ class TedeeLockCard extends HTMLElement {
       door: config.door || null,
       battery: config.battery || null,
       name: config.name || null,
+      show_activity: config.show_activity !== false,
     };
     if (this._hass) this._render();
   }
@@ -138,20 +139,32 @@ class TedeeLockCard extends HTMLElement {
       </svg>`;
   }
 
-  /* ── battery icon helper ───────────────────────────────────── */
+  /* ── battery helpers ──────────────────────────────────────── */
 
-  _batteryIcon(level) {
-    if (level == null) return "mdi:battery-unknown";
-    if (level <= 10) return "mdi:battery-10";
-    if (level <= 20) return "mdi:battery-20";
-    if (level <= 30) return "mdi:battery-30";
-    if (level <= 40) return "mdi:battery-40";
-    if (level <= 50) return "mdi:battery-50";
-    if (level <= 60) return "mdi:battery-60";
-    if (level <= 70) return "mdi:battery-70";
-    if (level <= 80) return "mdi:battery-80";
-    if (level <= 90) return "mdi:battery-90";
-    return "mdi:battery";
+  _batteryColor(level) {
+    if (level == null) return "#9e9e9e";
+    if (level <= 10) return "#f44336";
+    if (level <= 25) return "#ff9800";
+    return "#4caf50";
+  }
+
+  _batterySVG(level, charging) {
+    const color = this._batteryColor(level);
+    const pct = level != null ? Math.max(0, Math.min(100, level)) : 0;
+    const fillW = Math.round((pct / 100) * 16);
+    const bolt = charging
+      ? `<path d="M13 4 L10 9 L13 9 L11 14 L14 8 L11 8 Z" fill="#fff" opacity="0.9"/>`
+      : "";
+    return `
+      <svg viewBox="0 0 26 16" width="26" height="16" xmlns="http://www.w3.org/2000/svg">
+        <rect x="1" y="2" width="20" height="12" rx="2" ry="2"
+              fill="none" stroke="${color}" stroke-width="1.5"/>
+        <rect x="21" y="5.5" width="3" height="5" rx="1" ry="1"
+              fill="${color}" opacity="0.5"/>
+        <rect x="3" y="4" width="${fillW}" height="8" rx="1" ry="1"
+              fill="${color}" opacity="0.7"/>
+        ${bolt}
+      </svg>`;
   }
 
   /* ── action handlers ───────────────────────────────────────── */
@@ -196,9 +209,12 @@ class TedeeLockCard extends HTMLElement {
         ? parseInt(battState.state, 10)
         : null;
 
+    // Battery extras
+    const battCharging = battState && battState.attributes && battState.attributes.charging;
+
     // Last trigger / user (from lock entity attributes)
     let lastInfo = "";
-    if (lockState && lockState.attributes) {
+    if (this._config.show_activity && lockState && lockState.attributes) {
       const parts = [];
       if (lockState.attributes.last_user) parts.push(lockState.attributes.last_user);
       if (lockState.attributes.last_trigger) parts.push(lockState.attributes.last_trigger);
@@ -224,24 +240,23 @@ class TedeeLockCard extends HTMLElement {
       <style>
         :host { display: block; }
         ha-card {
-          padding: 10px 14px;
+          padding: 12px 14px;
           overflow: hidden;
         }
-        .row {
+        /* — top row: icon + name/state … chips — */
+        .top {
           display: flex;
           align-items: center;
-          gap: 12px;
-          flex-wrap: wrap;
+          gap: 10px;
         }
-        /* — left: icon + name/state — */
         .identity {
           display: flex;
           align-items: center;
           gap: 8px;
-          flex-shrink: 0;
           cursor: pointer;
+          min-width: 0;
         }
-        .lock-icon { display: flex; align-items: center; }
+        .lock-icon { display: flex; align-items: center; flex-shrink: 0; }
         .lock-icon.pulse { animation: pulse 1s ease-in-out infinite; }
         .lock-icon.shake { animation: shake 0.4s ease-in-out infinite; }
         .lock-icon.dim   { opacity: 0.35; }
@@ -261,6 +276,8 @@ class TedeeLockCard extends HTMLElement {
           font-weight: 500;
           color: var(--primary-text-color);
           white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
         .state {
           font-size: 11px;
@@ -268,14 +285,14 @@ class TedeeLockCard extends HTMLElement {
           text-transform: uppercase;
           letter-spacing: 0.8px;
         }
-        /* — middle: info chips — */
-        .info {
+        .chips {
           display: flex;
           align-items: center;
           gap: 10px;
+          margin-left: auto;
+          flex-shrink: 0;
           font-size: 12px;
           color: var(--secondary-text-color);
-          flex: 1 1 auto;
         }
         .chip {
           display: flex;
@@ -284,31 +301,39 @@ class TedeeLockCard extends HTMLElement {
           white-space: nowrap;
         }
         .chip ha-icon { --mdc-icon-size: 15px; }
+        .chip.batt { font-weight: 600; font-size: 11px; gap: 4px; }
+        .chip.batt svg { display: block; }
         .chip.clickable { cursor: pointer; }
         .chip.clickable:hover { color: var(--primary-text-color); }
-        .last {
+        /* — activity line — */
+        .activity {
           font-size: 11px;
           color: var(--disabled-text-color, #999);
+          margin-top: 4px;
+          padding-left: 48px;
           white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
         }
-        /* — right: buttons — */
+        /* — buttons row — */
         .buttons {
           display: flex;
-          gap: 5px;
-          flex-shrink: 0;
+          gap: 6px;
+          margin-top: 10px;
         }
         .btn {
-          padding: 5px 12px;
+          flex: 1;
+          padding: 7px 0;
           border: 1px solid var(--divider-color, #e0e0e0);
-          border-radius: 8px;
+          border-radius: 10px;
           background: none;
           color: var(--primary-text-color);
-          font-size: 12px;
+          font-size: 13px;
           font-weight: 500;
           cursor: pointer;
           transition: background 0.15s;
           font-family: inherit;
-          white-space: nowrap;
+          text-align: center;
         }
         .btn:hover:not(:disabled) { background: var(--secondary-background-color, #f5f5f5); }
         .btn:active:not(:disabled) { background: var(--divider-color, #e0e0e0); }
@@ -316,32 +341,30 @@ class TedeeLockCard extends HTMLElement {
       </style>
 
       <ha-card>
-        <div class="row">
-          <div class="identity">
+        <div class="top">
+          <div class="identity" id="identity">
             <div class="${animClass}">${this._lockSVG(meta.shackle, meta.color)}</div>
             <div>
               <div class="name">${this._esc(name)}</div>
               <div class="state" style="color:${meta.color}">${meta.label}</div>
             </div>
           </div>
-
-          <div class="info">
+          <div class="chips">
             ${doorState ? `<span class="chip clickable" id="chip-door"><ha-icon icon="mdi:door${doorText === "Open" ? "-open" : "-closed"}"></ha-icon>${doorText}</span>` : ""}
-            ${battLevel != null ? `<span class="chip clickable" id="chip-batt"><ha-icon icon="${this._batteryIcon(battLevel)}"></ha-icon>${battLevel}%</span>` : ""}
-            ${lastInfo ? `<span class="last">\u21bb ${this._esc(lastInfo)}</span>` : ""}
+            ${battLevel != null ? `<span class="chip batt clickable" id="chip-batt">${this._batterySVG(battLevel, battCharging)}<span style="color:${this._batteryColor(battLevel)}">${battLevel}%</span></span>` : ""}
           </div>
-
-          <div class="buttons">
-            ${showLock ? `<button class="btn" id="btn-lock" ${btnDisabled ? "disabled" : ""}>Lock</button>` : ""}
-            ${showUnlock ? `<button class="btn" id="btn-unlock" ${btnDisabled ? "disabled" : ""}>Unlock</button>` : ""}
-            ${showOpen ? `<button class="btn" id="btn-open" ${btnDisabled ? "disabled" : ""}>Open</button>` : ""}
-          </div>
+        </div>
+        ${lastInfo ? `<div class="activity">\u21bb ${this._esc(lastInfo)}</div>` : ""}
+        <div class="buttons">
+          ${showLock ? `<button class="btn" id="btn-lock" ${btnDisabled ? "disabled" : ""}>Lock</button>` : ""}
+          ${showUnlock ? `<button class="btn" id="btn-unlock" ${btnDisabled ? "disabled" : ""}>Unlock</button>` : ""}
+          ${showOpen ? `<button class="btn" id="btn-open" ${btnDisabled ? "disabled" : ""}>Open</button>` : ""}
         </div>
       </ha-card>
     `;
 
     // More-info on click
-    this.shadowRoot.querySelector(".identity")?.addEventListener("click", () => this._showMoreInfo(this._config.lock));
+    this.shadowRoot.getElementById("identity")?.addEventListener("click", () => this._showMoreInfo(this._config.lock));
     this.shadowRoot.getElementById("chip-door")?.addEventListener("click", () => this._showMoreInfo(this._config.door));
     this.shadowRoot.getElementById("chip-batt")?.addEventListener("click", () => this._showMoreInfo(this._config.battery));
 
@@ -372,7 +395,7 @@ window.customCards.push({
   name: "Tedee Lock",
   description: "Combined lock, door sensor and battery card for Tedee BLE locks.",
   preview: true,
-  documentationURL: "https://github.com/darius/tedee-ble",
+  documentationURL: "https://github.com/meltingice1337/tedee-ble",
 });
 
 console.info(
