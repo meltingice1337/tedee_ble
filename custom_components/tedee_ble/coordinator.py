@@ -45,6 +45,7 @@ from .tedee_lib.lock_commands import (
     DOOR_STATE_UNKNOWN,
     LOCK_STATE_LOCKED,
     LOCK_STATE_LOCKING,
+    LOCK_STATE_UNLOCKED,
     LOCK_STATE_UNKNOWN,
     LOCK_STATE_UNLOCKING,
     STATUS_OK,
@@ -476,13 +477,24 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         """Lock the door."""
         await self._send_command("lock")
 
-    async def async_unlock(self) -> None:
-        """Unlock the door."""
+    async def async_unlock(self, auto_pull: bool = False) -> None:
+        """Unlock the door. If auto_pull, also sends pull_spring after unlocking."""
         await self._send_command("unlock")
+        if auto_pull:
+            # Wait for the notification loop to report UNLOCKED (no BLE commands)
+            for _ in range(30):
+                await asyncio.sleep(0.5)
+                if self.state.lock_state == LOCK_STATE_UNLOCKED:
+                    await self._send_command("pull_spring")
+                    return
+                if not self.is_connected:
+                    break
+            logger.warning("Auto-pull: lock did not reach unlocked state within 15s")
 
     async def async_open(self) -> None:
         """Pull the spring (open)."""
         await self._send_command("pull_spring")
+
 
     async def _send_command(self, command: str) -> None:
         """Send a command to the lock with error handling."""

@@ -12,7 +12,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_DEVICE_ID, CONF_LOCK_MODEL, CONF_LOCK_NAME, CONF_SERIAL, DOMAIN
+from .const import CONF_AUTO_PULL, CONF_DEVICE_ID, CONF_LOCK_MODEL, CONF_LOCK_NAME, CONF_SERIAL, DOMAIN
 from .coordinator import TedeeCoordinator
 from .tedee_lib.lock_commands import (
     LOCK_STATE_LOCKED,
@@ -93,8 +93,10 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
         await self.coordinator.async_lock()
 
     async def async_unlock(self, **kwargs: Any) -> None:
-        """Unlock the door."""
-        await self.coordinator.async_unlock()
+        """Unlock the door. Also pulls spring if auto_pull option is enabled."""
+        await self.coordinator.async_unlock(
+            auto_pull=self.coordinator.entry.options.get(CONF_AUTO_PULL, False),
+        )
 
     async def async_open(self, **kwargs: Any) -> None:
         """Open the door (pull spring)."""

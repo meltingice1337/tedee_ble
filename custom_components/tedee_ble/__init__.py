@@ -22,7 +22,7 @@ PLATFORMS = ["lock", "binary_sensor", "sensor"]
 
 CARD_JS = "tedee-lock-card.js"
 CARD_URL = f"/tedee-ble/{CARD_JS}"
-CARD_VERSION = "1.0.3"
+CARD_VERSION = "1.3.1"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:

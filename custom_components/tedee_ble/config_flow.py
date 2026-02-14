@@ -8,11 +8,12 @@ import re
 import voluptuous as vol
 from bleak import BleakScanner
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 
 from .const import (
     CONF_ADDRESS,
     CONF_API_KEY,
+    CONF_AUTO_PULL,
     CONF_CERT_EXPIRATION,
     CONF_CERTIFICATE,
     CONF_DEVICE_ID,
@@ -42,10 +43,36 @@ MAC_REGEX = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 BLE_SCAN_TIMEOUT = 15.0
 
 
+class TedeeOptionsFlow(OptionsFlow):
+    """Handle options for Tedee BLE."""
+
+    async def async_step_init(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_AUTO_PULL,
+                        default=self.config_entry.options.get(CONF_AUTO_PULL, False),
+                    ): bool,
+                }
+            ),
+        )
+
+
 class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Tedee BLE."""
 
     VERSION = 1
+
+    @staticmethod
+    def async_get_options_flow(config_entry):
+        return TedeeOptionsFlow()
 
     def __init__(self) -> None:
         """Initialize."""

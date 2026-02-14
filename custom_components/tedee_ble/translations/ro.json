@@ -41,6 +41,19 @@
             "registration_failed": "Inregistrarea cu Tedee cloud a esuat. Verifica jurnalele pentru detalii."
         }
     },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Optiuni Tedee",
+                "data": {
+                    "auto_pull": "Trage arcul la deblocare"
+                },
+                "data_description": {
+                    "auto_pull": "Cand este activat (implicit), deblocarea trage si arcul pentru a deschide usa. Dezactiveaza pentru a debloca fara tragere."
+                }
+            }
+        }
+    },
     "entity": {
         "lock": {
             "lock": {

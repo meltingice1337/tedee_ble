@@ -23,9 +23,10 @@ CMD_GET_STATE = 0x5A
 CMD_SET_SIGNED_DATETIME = 0x71
 
 # Unlock parameters
-UNLOCK_NONE = 0x00
-UNLOCK_AUTO = 0x01
-UNLOCK_FORCE = 0x02
+UNLOCK_NONE = 0x00          # Default (includes auto-pull if lock has it enabled)
+UNLOCK_AUTO = 0x01          # Triggered by auto-unlock feature
+UNLOCK_FORCE = 0x02         # Force/emergency unlock
+UNLOCK_NO_PULL = 0x03       # Unlock without auto-pull spring
 
 # Lock parameters
 LOCK_NONE = 0x00
@@ -195,6 +196,7 @@ class TedeeLock:
             raise CommandError(result)
         logger.info("Pull spring command accepted")
         return result
+
 
     async def get_state(self) -> tuple[int, int, int]:
         """Get current lock state.

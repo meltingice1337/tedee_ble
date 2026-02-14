@@ -41,6 +41,19 @@
             "registration_failed": "Registration with Tedee cloud failed. Check the logs for details."
         }
     },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Tedee Lock Options",
+                "data": {
+                    "auto_pull": "Pull spring on unlock"
+                },
+                "data_description": {
+                    "auto_pull": "When enabled (default), unlocking also pulls the spring to open the door. Disable to unlock without pulling."
+                }
+            }
+        }
+    },
     "entity": {
         "lock": {
             "lock": {

@@ -16,6 +16,7 @@ CONF_DEVICE_PUBLIC_KEY = "device_public_key"
 CONF_SIGNED_TIME = "signed_time"
 CONF_LOCK_MODEL = "lock_model"
 CONF_USER_MAP = "user_map"  # {userId: username} from activity logs
+CONF_AUTO_PULL = "auto_pull"  # Unlock also pulls spring
 
 # Tedee API device type → model name
 DEVICE_TYPE_MODELS = {
