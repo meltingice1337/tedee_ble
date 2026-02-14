@@ -3,7 +3,6 @@
 import base64
 import hashlib
 import hmac
-import os
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -99,9 +98,22 @@ def ecdsa_sign(private_key: ec.EllipticCurvePrivateKey, data: bytes) -> bytes:
 
 
 def ecdsa_verify(public_key: ec.EllipticCurvePublicKey, signature: bytes, data: bytes) -> bool:
-    """Verify ECDSA P-256 signature."""
+    """Verify ECDSA P-256 signature (SHA-256 hashing applied by verify)."""
     try:
         public_key.verify(signature, data, ec.ECDSA(hashes.SHA256()))
+        return True
+    except Exception:
+        return False
+
+
+def ecdsa_verify_prehashed(
+    public_key: ec.EllipticCurvePublicKey, signature: bytes, digest: bytes
+) -> bool:
+    """Verify ECDSA P-256 signature where digest is already a SHA-256 hash."""
+    from cryptography.hazmat.primitives.asymmetric.utils import Prehashed
+
+    try:
+        public_key.verify(signature, digest, ec.ECDSA(Prehashed(hashes.SHA256())))
         return True
     except Exception:
         return False

@@ -278,6 +278,23 @@ class PTLSSession:
         if recv_hello_hash != hello_hash:
             raise PTLSError("Server verify: hello_hash mismatch")
 
+        # Verify server signature using the device's public key.
+        # The signature is over the transcript hash (prehashed SHA-256 digest)
+        # after updating it with auth_data_len + auth_data.
+        # This authenticates the lock's long-term identity.
+        _transcript_for_sig = self._transcript.copy()
+        _transcript_for_sig.update(
+            struct.pack(">H", len(recv_auth_data)) + recv_auth_data
+        )
+        sig_digest = _transcript_for_sig.digest()
+
+        if not crypto.ecdsa_verify_prehashed(
+            self.device_pubkey, server_sig, sig_digest
+        ):
+            raise PTLSError(
+                "Server signature verification failed — lock identity not confirmed"
+            )
+
         # Update transcript hash with decrypted server verify content
         self._hash_update(decrypted)
         logger.debug("Server verification passed")
