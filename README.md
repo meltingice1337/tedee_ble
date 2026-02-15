@@ -1,5 +1,5 @@
 <p>
-  <img src="https://raw.githubusercontent.com/meltingice1337/tedee_ble/master/images/logo@2x.png" alt="Tedee BLE">
+  <img src="https://raw.githubusercontent.com/meltingice1337/tedee_ble/master/images/icon@2x.png" alt="Tedee BLE">
 </p>
 
 # Tedee BLE - Home Assistant Integration
