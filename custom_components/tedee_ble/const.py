@@ -28,5 +28,6 @@ DEVICE_TYPE_MODELS = {
 # Coordinator
 RECONNECT_DELAYS = [2, 5, 10, 30, 60]
 POLL_INTERVAL_SECONDS = 600  # 10 minutes
-KEEPALIVE_INTERVAL_SECONDS = 45  # BLE keep-alive (lock disconnects after ~60-90s idle)
+KEEPALIVE_INTERVAL_SECONDS = 45  # BLE keep-alive (lock disconnects after ~25-45s idle on GO)
+UNAVAILABLE_GRACE_SECONDS = 15  # Don't mark unavailable until reconnect fails this long
 CERT_CHECK_INTERVAL_SECONDS = 6 * 3600  # 6 hours

@@ -37,6 +37,7 @@ from .const import (
     KEEPALIVE_INTERVAL_SECONDS,
     POLL_INTERVAL_SECONDS,
     RECONNECT_DELAYS,
+    UNAVAILABLE_GRACE_SECONDS,
 )
 from .tedee_lib.ble import TedeeBLETransport
 from .tedee_lib.cloud_api import TedeeCloudAPI, certificate_needs_refresh
@@ -108,6 +109,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
         # BLE activity tracking for keep-alive
         self._last_ble_activity: float = 0.0
+        self._disconnect_time: float | None = None
 
         # State
         self.state = TedeeState()
@@ -270,6 +272,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             # Mark available and notify entities
             self.state.available = True
             self._reconnect_attempt = 0
+            self._disconnect_time = None
             self.async_set_updated_data(self.state)
 
             # Start notification listener
@@ -302,10 +305,14 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
     @callback
     def _on_disconnect(self) -> None:
-        """Handle BLE disconnection."""
+        """Handle BLE disconnection.
+
+        Don't mark unavailable immediately, the lock drops idle connections 
+        after ~25-45s. Reconnects typically succeed in ~2-5s, so we give 
+        a grace period before showing entities as unavailable.
+        """
         logger.warning("BLE disconnected from %s", self.lock_name)
-        self.state.available = False
-        self.async_set_updated_data(self.state)
+        self._disconnect_time = time.monotonic()
 
         if not self._shutting_down:
             self._schedule_reconnect()
@@ -337,6 +344,15 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             await self._connect()
         except Exception as err:
             logger.warning("Reconnect to %s failed: %s", self.lock_name, err)
+            # Mark unavailable only after grace period expires
+            if (
+                self.state.available
+                and self._disconnect_time
+                and time.monotonic() - self._disconnect_time > UNAVAILABLE_GRACE_SECONDS
+            ):
+                logger.info("Grace period expired, marking %s unavailable", self.lock_name)
+                self.state.available = False
+                self.async_set_updated_data(self.state)
             if not self._shutting_down:
                 self._schedule_reconnect()
 
