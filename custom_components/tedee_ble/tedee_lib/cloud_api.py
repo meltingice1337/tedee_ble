@@ -127,6 +127,18 @@ class TedeeCloudAPI:
         )
         return data.get("result", [])
 
+    async def get_firmware_info(self, device_id: int) -> dict:
+        """Get firmware version and update status for a device."""
+        locks = await self.get_devices()
+        for lock in locks:
+            if lock.get("id") == device_id:
+                sw = (lock.get("softwareVersions") or [{}])[0]
+                return {
+                    "version": sw.get("version", ""),
+                    "updateAvailable": sw.get("updateAvailable", False),
+                }
+        return {"version": "", "updateAvailable": False}
+
     async def get_user_map(self, device_id: int) -> dict[int, str]:
         """Build userId → username lookup from activity logs."""
         activities = await self.get_device_activity(device_id, limit=200)

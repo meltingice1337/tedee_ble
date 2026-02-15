@@ -1,4 +1,4 @@
-"""Binary sensor (door) for Tedee BLE integration."""
+"""Binary sensors for Tedee BLE integration."""
 
 from __future__ import annotations
 
@@ -11,10 +11,18 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_DEVICE_ID, CONF_LOCK_MODEL, CONF_LOCK_NAME, CONF_SERIAL, DOMAIN
+from .const import (
+    CONF_DEVICE_ID,
+    CONF_LOCK_MODEL,
+    CONF_LOCK_NAME,
+    CONF_SERIAL,
+    CONF_UPDATE_AVAILABLE,
+    DOMAIN,
+)
 from .coordinator import TedeeCoordinator
 from .tedee_lib.lock_commands import DOOR_STATE_OPEN, DOOR_STATE_UNKNOWN
 
@@ -26,9 +34,12 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up Tedee door binary sensor."""
+    """Set up Tedee binary sensors."""
     coordinator: TedeeCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([TedeeDoorSensor(coordinator, entry)])
+    async_add_entities([
+        TedeeDoorSensor(coordinator, entry),
+        TedeeFirmwareUpdateSensor(coordinator, entry),
+    ])
 
 
 class TedeeDoorSensor(CoordinatorEntity[TedeeCoordinator], BinarySensorEntity):
@@ -64,3 +75,30 @@ class TedeeDoorSensor(CoordinatorEntity[TedeeCoordinator], BinarySensorEntity):
         if self.coordinator.state.door_state == DOOR_STATE_UNKNOWN:
             return None
         return self.coordinator.state.door_state == DOOR_STATE_OPEN
+
+
+class TedeeFirmwareUpdateSensor(CoordinatorEntity[TedeeCoordinator], BinarySensorEntity):
+    """Shows whether a firmware update is available for the lock."""
+
+    _attr_has_entity_name = True
+    _attr_translation_key = "firmware_update"
+    _attr_device_class = BinarySensorDeviceClass.UPDATE
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: TedeeCoordinator, entry: ConfigEntry) -> None:
+        """Initialize the firmware update sensor."""
+        super().__init__(coordinator)
+        self._entry = entry
+        self._attr_unique_id = f"{entry.data[CONF_DEVICE_ID]}_firmware_update"
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, str(entry.data[CONF_DEVICE_ID]))},
+            name=entry.data.get(CONF_LOCK_NAME, "Tedee Lock"),
+            manufacturer="Tedee",
+            model=entry.data.get(CONF_LOCK_MODEL, "Lock"),
+            serial_number=entry.data.get(CONF_SERIAL),
+        )
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if a firmware update is available."""
+        return self._entry.data.get(CONF_UPDATE_AVAILABLE, False)

@@ -18,6 +18,7 @@ from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from homeassistant.components.bluetooth import async_ble_device_from_address
+from homeassistant.helpers import device_registry as dr
 
 from .const import (
     CERT_CHECK_INTERVAL_SECONDS,
@@ -27,11 +28,13 @@ from .const import (
     CONF_CERTIFICATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_PUBLIC_KEY,
+    CONF_FIRMWARE_VERSION,
     CONF_LOCK_NAME,
     CONF_MOBILE_ID,
     CONF_PRIVATE_KEY_PEM,
     CONF_SERIAL,
     CONF_SIGNED_TIME,
+    CONF_UPDATE_AVAILABLE,
     CONF_USER_MAP,
     DOMAIN,
     KEEPALIVE_INTERVAL_SECONDS,
@@ -137,6 +140,12 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
     async def async_setup(self) -> None:
         """Set up the coordinator — connect to the lock."""
+        if not self.entry.data.get(CONF_FIRMWARE_VERSION):
+            try:
+                await self._refresh_firmware_info()
+            except Exception:
+                logger.debug("Firmware info fetch failed", exc_info=True)
+
         try:
             await self._connect()
         except Exception as err:
@@ -551,13 +560,39 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 data[CONF_MOBILE_ID], data[CONF_DEVICE_ID]
             )
             user_map = await api.get_user_map(data[CONF_DEVICE_ID])
+            fw_info = await api.get_firmware_info(data[CONF_DEVICE_ID])
         new_data = {**data}
         new_data[CONF_CERTIFICATE] = cert_data["certificate"]
         new_data[CONF_CERT_EXPIRATION] = cert_data["expirationDate"]
         new_data[CONF_DEVICE_PUBLIC_KEY] = cert_data["devicePublicKey"]
         new_data[CONF_USER_MAP] = {str(k): v for k, v in user_map.items()}
+        new_data[CONF_FIRMWARE_VERSION] = fw_info["version"]
+        new_data[CONF_UPDATE_AVAILABLE] = fw_info["updateAvailable"]
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+        self._update_device_sw_version(fw_info["version"])
         logger.info("Certificate refreshed, expires %s", cert_data["expirationDate"])
+
+    async def _refresh_firmware_info(self) -> None:
+        """Fetch firmware version and update status from cloud API."""
+        data = self.entry.data
+        async with TedeeCloudAPI(data[CONF_API_KEY]) as api:
+            fw_info = await api.get_firmware_info(data[CONF_DEVICE_ID])
+        new_data = {**data}
+        new_data[CONF_FIRMWARE_VERSION] = fw_info["version"]
+        new_data[CONF_UPDATE_AVAILABLE] = fw_info["updateAvailable"]
+        self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+        # Update device registry so sw_version shows immediately
+        self._update_device_sw_version(fw_info["version"])
+        logger.info("Firmware: %s (update: %s)", fw_info["version"], fw_info["updateAvailable"])
+
+    def _update_device_sw_version(self, version: str) -> None:
+        """Update sw_version in the device registry."""
+        dev_reg = dr.async_get(self.hass)
+        device = dev_reg.async_get_device(
+            identifiers={(DOMAIN, str(self.device_id))}
+        )
+        if device:
+            dev_reg.async_update_device(device.id, sw_version=version)
 
     async def _resolve_unknown_user(self, access_id: int) -> str:
         """Refresh user map from cloud when an unknown access_id is seen."""

@@ -15,6 +15,7 @@ from .const import (
     CONF_API_KEY,
     CONF_AUTO_PULL,
     CONF_CERT_EXPIRATION,
+    CONF_FIRMWARE_VERSION,
     CONF_CERTIFICATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_PUBLIC_KEY,
@@ -24,6 +25,7 @@ from .const import (
     CONF_PRIVATE_KEY_PEM,
     CONF_SERIAL,
     CONF_SIGNED_TIME,
+    CONF_UPDATE_AVAILABLE,
     CONF_USER_MAP,
     DEVICE_TYPE_MODELS,
     DOMAIN,
@@ -219,6 +221,9 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
         serial = lock.get("serialNumber", "")
         lock_name = lock.get("name", "Lock")
         lock_model = DEVICE_TYPE_MODELS.get(lock.get("type"), "Lock")
+        sw_info = (lock.get("softwareVersions") or [{}])[0]
+        firmware_version = sw_info.get("version", "")
+        update_available = sw_info.get("updateAvailable", False)
 
         try:
             # Generate ECDSA P-256 key pair
@@ -258,5 +263,7 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_DEVICE_PUBLIC_KEY: cert_data["devicePublicKey"],
                 CONF_SIGNED_TIME: signed_time,
                 CONF_USER_MAP: {str(k): v for k, v in user_map.items()},
+                CONF_FIRMWARE_VERSION: firmware_version,
+                CONF_UPDATE_AVAILABLE: update_available,
             },
         )

@@ -12,7 +12,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_AUTO_PULL, CONF_DEVICE_ID, CONF_LOCK_MODEL, CONF_LOCK_NAME, CONF_SERIAL, DOMAIN
+from .const import CONF_AUTO_PULL, CONF_DEVICE_ID, CONF_FIRMWARE_VERSION, CONF_LOCK_MODEL, CONF_LOCK_NAME, CONF_SERIAL, DOMAIN
 from .coordinator import TedeeCoordinator
 from .tedee_lib.lock_commands import (
     LOCK_STATE_LOCKED,
@@ -44,13 +44,19 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
     def __init__(self, coordinator: TedeeCoordinator, entry: ConfigEntry) -> None:
         """Initialize the lock entity."""
         super().__init__(coordinator)
+        self._entry = entry
         self._attr_unique_id = f"{entry.data[CONF_DEVICE_ID]}_lock"
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, str(entry.data[CONF_DEVICE_ID]))},
-            name=entry.data.get(CONF_LOCK_NAME, "Tedee Lock"),
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device info, reading firmware version dynamically."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, str(self._entry.data[CONF_DEVICE_ID]))},
+            name=self._entry.data.get(CONF_LOCK_NAME, "Tedee Lock"),
             manufacturer="Tedee",
-            model=entry.data.get(CONF_LOCK_MODEL, "Lock"),
-            serial_number=entry.data.get(CONF_SERIAL),
+            model=self._entry.data.get(CONF_LOCK_MODEL, "Lock"),
+            serial_number=self._entry.data.get(CONF_SERIAL),
+            sw_version=self._entry.data.get(CONF_FIRMWARE_VERSION),
         )
 
     @property

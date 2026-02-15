@@ -63,6 +63,9 @@
         "binary_sensor": {
             "door": {
                 "name": "Door"
+            },
+            "firmware_update": {
+                "name": "Firmware update"
             }
         },
         "sensor": {

@@ -43,7 +43,8 @@ Control your Tedee smart lock over **Bluetooth Low Energy** directly from Home A
 - **Real-time state updates** - Lock state changes (locked, unlocked, jammed, door opened) are pushed instantly via BLE notifications, no polling needed
 - **Jam detection** - The lock reports if it gets jammed during locking or unlocking
 - **Activity tracking** - See who triggered the last action and how (see [details below](#activity-tracking))
-- **Persistent connection with auto-reconnect** - The integration maintains a live BLE connection and automatically reconnects if it drops
+- **Firmware version and update status** - Firmware version shown on the device page, plus a binary sensor indicating when a firmware update is available (refreshed from the Tedee Cloud API)
+- **Persistent connection with auto-reconnect** - The integration maintains a live BLE connection and automatically reconnects if it drops, with a grace period that hides brief reconnections from the UI
 - **Direct BLE and ESPHome Bluetooth Proxy** - Connect directly from your Home Assistant host's Bluetooth adapter, or route through an [ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/) for extended range
 - **Custom dashboard card** - A built-in Lovelace card with animated status icons, smart action buttons, and at-a-glance info
 
@@ -99,6 +100,9 @@ The integration creates the following entities per lock, all grouped under a sin
 | **Lock** | `lock` | Lock, unlock, and open (pull spring). Shows locking, unlocking, and jammed states. |
 | **Door** | `binary_sensor` | Door open/closed state. Requires the optional **Tedee door sensor** accessory to be installed on the lock. |
 | **Battery** | `sensor` | Battery percentage and charging status |
+| **Firmware update** | `binary_sensor` | Whether a firmware update is available for the lock (diagnostic) |
+
+The **firmware version** is shown on the device info page (Settings > Devices > your lock), not as a separate entity.
 
 ### Activity tracking
 
@@ -178,9 +182,9 @@ name: Front Door                    # optional, overrides entity name
 1. **Device Registration** - The integration registers with Tedee's Cloud API and obtains a signed certificate for BLE authentication
 2. **BLE Discovery** - The integration scans for your lock over Bluetooth (directly or through an ESPHome proxy)
 3. **Encrypted Session** - A secure, encrypted BLE session is established using the certificate
-4. **Persistent Connection** - The integration maintains a persistent BLE connection with keep-alive pings (the lock disconnects after a period of inactivity)
+4. **Persistent Connection** - The integration maintains a persistent BLE connection with keep-alive pings (the lock disconnects after ~25-45s of inactivity)
 5. **Real-time Notifications** - Lock state changes are pushed instantly via BLE notifications
-6. **Automatic Reconnection** - If the BLE connection drops, the integration reconnects automatically
+6. **Automatic Reconnection** - If the BLE connection drops, the integration reconnects automatically with exponential backoff (2s, 5s, 10s, 30s, 60s). A 15-second grace period prevents brief reconnections from showing entities as "unavailable"
 
 ## Troubleshooting
 
@@ -191,9 +195,9 @@ name: Front Door                    # optional, overrides entity name
 - You can enter the MAC address manually if the scan fails
 
 ### Frequent disconnections
-- BLE range issues - move the HA host closer, or use an [ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/) placed near the lock
-- Interference from other 2.4GHz devices (Wi-Fi, Zigbee)
-- The integration will reconnect automatically
+- The Tedee lock (especially the GO model) drops idle BLE connections after ~25-45 seconds. This is normal battery-saving behavior. The integration reconnects automatically in ~2-5 seconds, and a grace period prevents entities from briefly showing as "unavailable"
+- If entities stay unavailable for longer periods, check BLE range - move the HA host closer, or use an [ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/) placed near the lock
+- Interference from other 2.4GHz devices (Wi-Fi, Zigbee) can cause disconnections
 
 ### Certificate errors
 - The integration auto-refreshes certificates. If you see persistent errors, remove and re-add the integration
