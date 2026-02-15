@@ -3,7 +3,7 @@
         "step": {
             "user": {
                 "title": "Tedee Cloud API",
-                "description": "Introdu cheia ta personala de acces Tedee. O poti crea pe https://portal.tedee.com/ la sectiunea Personal Access Keys.",
+                "description": "Introdu cheia ta personala de acces Tedee. O poti crea pe [portalul Tedee]({tedee_portal_url}) la sectiunea Personal Access Keys.",
                 "data": {
                     "api_key": "Cheie de acces personala"
                 }

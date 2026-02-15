@@ -119,6 +119,9 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+            description_placeholders={
+                "tedee_portal_url": "https://portal.tedee.com/",
+            },
         )
 
     async def async_step_select_lock(
