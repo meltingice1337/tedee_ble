@@ -116,11 +116,11 @@ git tag -s -m "v${NEW_VERSION}" "v${NEW_VERSION}"
 echo -e "${CYAN}Pushing to origin...${NC}"
 git push origin master --follow-tags
 
-# Build zip for HACS zip_release
+# Build zip for HACS zip_release (files must be at zip root, not in a subdirectory)
 ZIP_NAME="tedee_ble.zip"
 echo -e "${CYAN}Building ${ZIP_NAME}...${NC}"
-cd custom_components
-zip -r "${REPO_ROOT}/${ZIP_NAME}" tedee_ble/ -x "tedee_ble/__pycache__/*" "tedee_ble/**/__pycache__/*"
+cd custom_components/tedee_ble
+zip -r "${REPO_ROOT}/${ZIP_NAME}" . -x "__pycache__/*" "**/__pycache__/*"
 cd "$REPO_ROOT"
 
 # Create GitHub release with zip asset
