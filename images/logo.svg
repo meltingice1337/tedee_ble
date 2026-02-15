@@ -31,7 +31,7 @@
   </g>
   
   <text x="540" y="340" font-family="'Inter', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="240" font-weight="900" letter-spacing="-2">
-    <tspan fill="var(--primary-text-color, #1b1c1e)">Tedee</tspan>
+    <tspan fill="#00a9e0">Tedee</tspan>
     <tspan fill="#00a9e0">BLE</tspan>
   </text>
 </svg>
