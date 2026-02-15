@@ -1,10 +1,11 @@
 {
     "domain": "tedee_ble",
     "name": "Tedee BLE",
-    "codeowners": [],
+    "codeowners": ["@meltingice1337"],
     "config_flow": true,
     "dependencies": ["bluetooth", "frontend", "http", "lovelace"],
     "documentation": "https://github.com/meltingice1337/tedee_ble",
+    "issue_tracker": "https://github.com/meltingice1337/tedee_ble/issues",
     "iot_class": "local_push",
     "requirements": ["bleak>=0.21", "bleak-retry-connector>=3.0", "cryptography>=41.0", "httpx"],
     "version": "0.1.6"
