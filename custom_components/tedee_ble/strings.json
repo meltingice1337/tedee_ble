@@ -3,7 +3,10 @@
         "step": {
             "user": {
                 "title": "Tedee Cloud API",
-                "description": "Enter your Tedee Personal Access Key. You can create one at https://portal.tedee.com/ under Personal Access Keys.",
+                "description": "Enter your Tedee Personal Access Key. You can create one at [the Tedee portal]({tedee_portal_url}) under Personal Access Keys.",
+                "description_placeholders": {
+                    "tedee_portal_url": "https://portal.tedee.com/"
+                },
                 "data": {
                     "api_key": "Personal Access Key"
                 }
