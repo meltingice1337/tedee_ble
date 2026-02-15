@@ -5,7 +5,7 @@
  * last trigger / user, and Lock / Unlock / Open action buttons.
  */
 
-const CARD_VERSION = "1.3.1";
+const CARD_VERSION = "1.3.2";
 
 class TedeeLockCard extends HTMLElement {
   /* ── lifecycle ─────────────────────────────────────────────── */
@@ -199,7 +199,7 @@ class TedeeLockCard extends HTMLElement {
 
     // Door
     let doorText = "";
-    if (doorState) {
+    if (doorState && doorState.state !== "unavailable" && doorState.state !== "unknown") {
       doorText = doorState.state === "on" ? "Open" : "Closed";
     }
 
@@ -350,7 +350,7 @@ class TedeeLockCard extends HTMLElement {
             </div>
           </div>
           <div class="chips">
-            ${doorState ? `<span class="chip clickable" id="chip-door"><ha-icon icon="mdi:door${doorText === "Open" ? "-open" : "-closed"}"></ha-icon>${doorText}</span>` : ""}
+            ${doorText ? `<span class="chip clickable" id="chip-door"><ha-icon icon="mdi:door${doorText === "Open" ? "-open" : "-closed"}"></ha-icon>${doorText}</span>` : ""}
             ${battLevel != null ? `<span class="chip batt clickable" id="chip-batt">${this._batterySVG(battLevel, battCharging)}<span style="color:${this._batteryColor(battLevel)}">${battLevel}%</span></span>` : ""}
           </div>
         </div>
