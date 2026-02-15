@@ -116,11 +116,22 @@ git tag -s -m "v${NEW_VERSION}" "v${NEW_VERSION}"
 echo -e "${CYAN}Pushing to origin...${NC}"
 git push origin master --follow-tags
 
-# Create GitHub release
+# Build zip for HACS zip_release
+ZIP_NAME="tedee_ble.zip"
+echo -e "${CYAN}Building ${ZIP_NAME}...${NC}"
+cd custom_components
+zip -r "${REPO_ROOT}/${ZIP_NAME}" tedee_ble/ -x "tedee_ble/__pycache__/*" "tedee_ble/**/__pycache__/*"
+cd "$REPO_ROOT"
+
+# Create GitHub release with zip asset
 echo -e "${CYAN}Creating GitHub release...${NC}"
 gh release create "v${NEW_VERSION}" \
     --title "v${NEW_VERSION}" \
-    --notes "$NOTES"
+    --notes "$NOTES" \
+    "${ZIP_NAME}#${ZIP_NAME}"
+
+# Clean up
+rm -f "$ZIP_NAME"
 
 echo ""
 echo -e "${GREEN}Released v${NEW_VERSION}${NC}"
