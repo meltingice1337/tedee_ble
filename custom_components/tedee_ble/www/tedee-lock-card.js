@@ -5,7 +5,7 @@
  * last trigger / user, and Lock / Unlock / Open action buttons.
  */
 
-const CARD_VERSION = "1.3.2";
+const CARD_VERSION = "1.4.1";
 
 class TedeeLockCard extends HTMLElement {
   /* ── lifecycle ─────────────────────────────────────────────── */
@@ -27,6 +27,7 @@ class TedeeLockCard extends HTMLElement {
       lock: config.lock,
       door: config.door || null,
       battery: config.battery || null,
+      event: config.event || null,
       name: config.name || null,
       show_activity: config.show_activity !== false,
     };
@@ -97,6 +98,13 @@ class TedeeLockCard extends HTMLElement {
           label: "Unlocking…",
           shackle: "open",
           anim: "pulse",
+        };
+      case "partially_unlocked":
+        return {
+          color: "#ff9800",
+          label: "Partially Unlocked",
+          shackle: "open",
+          anim: "",
         };
       case "jammed":
         return {
@@ -189,7 +197,11 @@ class TedeeLockCard extends HTMLElement {
     const doorState = this._stateOf(this._config.door);
     const battState = this._stateOf(this._config.battery);
 
-    const state = lockState ? lockState.state : "unavailable";
+    const haState = lockState ? lockState.state : "unavailable";
+    // Use last_action attribute for finer states (e.g. partially_unlocked)
+    const lastAction = lockState && lockState.attributes && lockState.attributes.last_action;
+    const state = lastAction && this._lockMeta(lastAction).label !== "Unavailable"
+      ? lastAction : haState;
     const meta = this._lockMeta(state);
 
     // Name
@@ -215,10 +227,13 @@ class TedeeLockCard extends HTMLElement {
     // Last trigger / user (from lock entity attributes)
     let lastInfo = "";
     if (this._config.show_activity && lockState && lockState.attributes) {
-      const parts = [];
-      if (lockState.attributes.last_user) parts.push(lockState.attributes.last_user);
-      if (lockState.attributes.last_trigger) parts.push(lockState.attributes.last_trigger);
-      lastInfo = parts.join(" \u00b7 ");
+      const a = lockState.attributes;
+      if (a.last_action) {
+        const parts = [];
+        if (a.last_user && a.last_user !== "N/A") parts.push(a.last_user);
+        if (a.last_trigger && a.last_trigger !== "unknown") parts.push(a.last_trigger);
+        if (parts.length) lastInfo = parts.join(" \u00b7 ");
+      }
     }
 
     // Determine animation class
@@ -229,12 +244,12 @@ class TedeeLockCard extends HTMLElement {
     const unavailable = state === "unavailable";
     const btnDisabled = transitioning || unavailable;
 
-    // Lock → show when unlocked (or jammed)
-    const showLock = state === "unlocked" || state === "jammed";
+    // Lock → show when unlocked / partially unlocked (or jammed)
+    const showLock = state === "unlocked" || state === "partially_unlocked" || state === "jammed";
     // Unlock → show when locked (or jammed)
     const showUnlock = state === "locked" || state === "jammed";
-    // Open (pull spring) → only when already unlocked
-    const showOpen = state === "unlocked";
+    // Open (pull spring) → only when already unlocked / partially unlocked
+    const showOpen = state === "unlocked" || state === "partially_unlocked";
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -314,7 +329,9 @@ class TedeeLockCard extends HTMLElement {
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
+          cursor: pointer;
         }
+        .activity:hover { color: var(--secondary-text-color); }
         /* — buttons row — */
         .buttons {
           display: flex;
@@ -354,7 +371,7 @@ class TedeeLockCard extends HTMLElement {
             ${battLevel != null ? `<span class="chip batt clickable" id="chip-batt">${this._batterySVG(battLevel, battCharging)}<span style="color:${this._batteryColor(battLevel)}">${battLevel}%</span></span>` : ""}
           </div>
         </div>
-        ${lastInfo ? `<div class="activity">\u21bb ${this._esc(lastInfo)}</div>` : ""}
+        ${lastInfo ? `<div class="activity clickable" id="activity">\u21bb ${this._esc(lastInfo)}</div>` : ""}
         <div class="buttons">
           ${showLock ? `<button class="btn" id="btn-lock" ${btnDisabled ? "disabled" : ""}>Lock</button>` : ""}
           ${showUnlock ? `<button class="btn" id="btn-unlock" ${btnDisabled ? "disabled" : ""}>Unlock</button>` : ""}
@@ -367,6 +384,7 @@ class TedeeLockCard extends HTMLElement {
     this.shadowRoot.getElementById("identity")?.addEventListener("click", () => this._showMoreInfo(this._config.lock));
     this.shadowRoot.getElementById("chip-door")?.addEventListener("click", () => this._showMoreInfo(this._config.door));
     this.shadowRoot.getElementById("chip-batt")?.addEventListener("click", () => this._showMoreInfo(this._config.battery));
+    this.shadowRoot.getElementById("activity")?.addEventListener("click", () => this._showMoreInfo(this._config.event || this._config.lock));
 
     // Action buttons
     this.shadowRoot.getElementById("btn-lock")?.addEventListener("click", () => this._callService("lock"));
