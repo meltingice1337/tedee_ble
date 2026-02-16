@@ -37,6 +37,7 @@ from .const import (
     CONF_UPDATE_AVAILABLE,
     CONF_USER_MAP,
     DOMAIN,
+    EVENT_LOCK_ACTION,
     KEEPALIVE_INTERVAL_SECONDS,
     POLL_INTERVAL_SECONDS,
     RECONNECT_DELAYS,
@@ -76,7 +77,9 @@ class TedeeState:
     battery_charging: bool = False
     available: bool = False
     last_trigger: str = "unknown"  # What caused the last state change
-    last_user: str = ""  # Who triggered the last action
+    last_user: str = "N/A"  # Who triggered the last action
+    last_event_id: int = 0  # Incremented on each lock action event
+    last_event_type: str = ""  # e.g. "locked", "unlocked"
 
 
 class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
@@ -116,6 +119,9 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
         # State
         self.state = TedeeState()
+
+        # Entity ID for logbook (set by lock entity in async_added_to_hass)
+        self.lock_entity_id: str | None = None
 
     @property
     def device_id(self) -> int:
@@ -445,9 +451,20 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                             username = await self._resolve_unknown_user(access_id)
                         self.state.last_user = username
                     else:
-                        self.state.last_user = ""
+                        self.state.last_user = "N/A"
+                    # Fire lock action event
+                    self.state.last_event_type = notification["state_name"].lower()
+                    self.state.last_event_id += 1
                     if notification["door_state"] != DOOR_STATE_UNKNOWN:
                         self.state.door_state = notification["door_state"]
+                    # Fire event bus event for logbook
+                    self.hass.bus.async_fire(EVENT_LOCK_ACTION, {
+                        "entity_id": self.lock_entity_id,
+                        "lock_name": self.lock_name,
+                        "action": self.state.last_event_type,
+                        "trigger": self.state.last_trigger,
+                        "user": self.state.last_user,
+                    })
                     self.async_set_updated_data(self.state)
 
 

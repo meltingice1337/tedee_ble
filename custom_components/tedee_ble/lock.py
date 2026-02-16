@@ -47,6 +47,11 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
         self._entry = entry
         self._attr_unique_id = f"{entry.data[CONF_DEVICE_ID]}_lock"
 
+    async def async_added_to_hass(self) -> None:
+        """Register entity_id with coordinator for logbook entries."""
+        await super().async_added_to_hass()
+        self.coordinator.lock_entity_id = self.entity_id
+
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info, reading firmware version dynamically."""
@@ -89,10 +94,11 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional lock attributes."""
-        attrs = {"last_trigger": self.coordinator.state.last_trigger}
-        if self.coordinator.state.last_user:
-            attrs["last_user"] = self.coordinator.state.last_user
-        return attrs
+        return {
+            "last_action": self.coordinator.state.last_event_type or None,
+            "last_trigger": self.coordinator.state.last_trigger,
+            "last_user": self.coordinator.state.last_user,
+        }
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the door."""

@@ -33,3 +33,6 @@ POLL_INTERVAL_SECONDS = 600  # 10 minutes
 KEEPALIVE_INTERVAL_SECONDS = 45  # BLE keep-alive (lock disconnects after ~25-45s idle on GO)
 UNAVAILABLE_GRACE_SECONDS = 15  # Don't mark unavailable until reconnect fails this long
 CERT_CHECK_INTERVAL_SECONDS = 6 * 3600  # 6 hours
+
+# Event bus event type for logbook
+EVENT_LOCK_ACTION = f"{DOMAIN}_lock_action"
