@@ -438,33 +438,35 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 logger.debug("Notification from %s: %s", self.lock_name, notification)
 
                 if notification["type"] == "lock_state":
+                    prev_lock_state = self.state.lock_state
                     self.state.lock_state = notification["state"]
                     self.state.lock_status = notification["status"]
-                    self.state.last_trigger = notification.get("trigger_name", "unknown")
-                    # Resolve access_id to username
-                    access_id = notification.get("access_id", 0)
-                    if access_id:
-                        user_map = self.entry.data.get(CONF_USER_MAP, {})
-                        username = user_map.get(str(access_id))
-                        if username is None:
-                            # Unknown user - refresh map from cloud
-                            username = await self._resolve_unknown_user(access_id)
-                        self.state.last_user = username
-                    else:
-                        self.state.last_user = "N/A"
-                    # Fire lock action event
-                    self.state.last_event_type = notification["state_name"].lower()
-                    self.state.last_event_id += 1
                     if notification["door_state"] != DOOR_STATE_UNKNOWN:
                         self.state.door_state = notification["door_state"]
-                    # Fire event bus event for logbook
-                    self.hass.bus.async_fire(EVENT_LOCK_ACTION, {
-                        "entity_id": self.lock_entity_id,
-                        "lock_name": self.lock_name,
-                        "action": self.state.last_event_type,
-                        "trigger": self.state.last_trigger,
-                        "user": self.state.last_user,
-                    })
+                    # Only fire lock action event if lock state actually changed
+                    # (door_sensor triggers send unchanged lock state — skip those)
+                    if notification["state"] != prev_lock_state:
+                        self.state.last_trigger = notification.get("trigger_name", "unknown")
+                        # Resolve access_id to username
+                        access_id = notification.get("access_id", 0)
+                        if access_id:
+                            user_map = self.entry.data.get(CONF_USER_MAP, {})
+                            username = user_map.get(str(access_id))
+                            if username is None:
+                                username = await self._resolve_unknown_user(access_id)
+                            self.state.last_user = username
+                        else:
+                            self.state.last_user = "N/A"
+                        self.state.last_event_type = notification["state_name"].lower()
+                        self.state.last_event_id += 1
+                        # Fire event bus event for logbook
+                        self.hass.bus.async_fire(EVENT_LOCK_ACTION, {
+                            "entity_id": self.lock_entity_id,
+                            "lock_name": self.lock_name,
+                            "action": self.state.last_event_type,
+                            "trigger": self.state.last_trigger,
+                            "user": self.state.last_user,
+                        })
                     self.async_set_updated_data(self.state)
 
 
