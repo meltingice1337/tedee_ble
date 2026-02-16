@@ -99,6 +99,7 @@ TRIGGER_AUTO_LOCK = 0x04    # Auto-lock (after door closed)
 TRIGGER_DOOR_SENSOR = 0x10  # Door sensor state change
 
 TRIGGER_NAMES = {
+    0x00: "manual",
     0x01: "button",
     0x02: "remote",
     0x04: "auto_lock",
