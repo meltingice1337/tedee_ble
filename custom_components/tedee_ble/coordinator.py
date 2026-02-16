@@ -262,6 +262,10 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             await self._lock.drain_pending_notifications()
 
             # Fetch initial state
+            was_available = self.state.available
+            prev_lock_state = self.state.lock_state
+            prev_door_state = self.state.door_state
+
             try:
                 lock_state, status, door_state = await self._lock.get_state()
                 self.state.lock_state = lock_state
@@ -282,7 +286,16 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             self.state.available = True
             self._reconnect_attempt = 0
             self._disconnect_time = None
-            self.async_set_updated_data(self.state)
+
+            # Only push update if something actually changed, to avoid
+            # resetting HA's "last_changed" timestamp on routine reconnects
+            state_changed = (
+                not was_available
+                or self.state.lock_state != prev_lock_state
+                or self.state.door_state != prev_door_state
+            )
+            if state_changed:
+                self.async_set_updated_data(self.state)
 
             # Start notification listener
             self._notification_task = self.hass.async_create_background_task(
