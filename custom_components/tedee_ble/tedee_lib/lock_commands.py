@@ -103,6 +103,7 @@ TRIGGER_NAMES = {
     0x01: "button",
     0x02: "remote",
     0x04: "auto_lock",
+    0x05: "auto",
     0x08: "auto_unlock",
     0x10: "door_sensor",
 }
