@@ -86,6 +86,18 @@ class TedeeBLETransport:
             await self._client.connect()
             logger.debug("Connected via direct BleakClient")
 
+        # Acquire MTU from BlueZ before accessing mtu_size.
+        # HA wraps BleakClient in HaBleakClientWrapper, so reach through to _backend.
+        backend = getattr(self._client, '_backend', self._client)
+        if hasattr(backend, '_acquire_mtu'):
+            try:
+                await backend._acquire_mtu()
+            except Exception:
+                logger.debug("Failed to acquire MTU, using default", exc_info=True)
+
+        self._mtu = self._client.mtu_size
+        logger.info("Connected (MTU: %d)", self._mtu)
+
         # Subscribe to PTLS TX notifications
         await self._client.start_notify(CHAR_PTLS_TX, self._on_ptls_tx)
         # Subscribe to Notifications characteristic
@@ -93,9 +105,6 @@ class TedeeBLETransport:
         # Subscribe to API Commands indications
         await self._client.start_notify(CHAR_API_COMMANDS, self._on_api_command)
         logger.info("Subscribed to all characteristics")
-
-        self._mtu = self._client.mtu_size
-        logger.info("Connected (MTU: %d)", self._mtu)
 
     async def disconnect(self) -> None:
         """Disconnect from the lock."""

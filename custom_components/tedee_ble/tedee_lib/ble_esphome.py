@@ -171,14 +171,23 @@ class ESPHomeBLETransport:
         logger.info("Connecting BLE to %s...", self._lock_address)
         await self._client.connect()
 
+        # Acquire MTU from BlueZ before accessing mtu_size.
+        backend = getattr(self._client, '_backend', self._client)
+        if hasattr(backend, '_acquire_mtu'):
+            try:
+                await backend._acquire_mtu()
+            except Exception:
+                logger.debug("Failed to acquire MTU, using default", exc_info=True)
+
+        self._mtu = self._client.mtu_size
+        logger.info("BLE connected (MTU: %d)", self._mtu)
+
         # 4. Subscribe to notifications (same as TedeeBLETransport)
         await self._client.start_notify(CHAR_PTLS_TX, self._on_ptls_tx)
         await self._client.start_notify(CHAR_NOTIFICATIONS, self._on_notification)
         await self._client.start_notify(CHAR_API_COMMANDS, self._on_api_command)
 
         self._connected = True
-        self._mtu = self._client.mtu_size
-        logger.info("BLE connected (MTU: %d)", self._mtu)
         logger.info("Subscribed to all characteristics via ESPHome proxy")
 
     def _on_disconnect(self, client: BleakClient) -> None:
