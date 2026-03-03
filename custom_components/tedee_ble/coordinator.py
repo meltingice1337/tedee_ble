@@ -17,7 +17,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from homeassistant.components.bluetooth import async_ble_device_from_address
+from homeassistant.components.bluetooth import (
+    async_ble_device_from_address,
+    async_discovered_service_info,
+)
 from homeassistant.helpers import device_registry as dr
 
 from .const import (
@@ -43,7 +46,7 @@ from .const import (
     RECONNECT_DELAYS,
     UNAVAILABLE_GRACE_SECONDS,
 )
-from .tedee_lib.ble import TedeeBLETransport
+from .tedee_lib.ble import TedeeBLETransport, serial_to_service_uuid
 from .tedee_lib.cloud_api import TedeeCloudAPI, certificate_needs_refresh
 from .tedee_lib.crypto import pem_to_private_key
 from .tedee_lib.lock_commands import (
@@ -175,9 +178,42 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         ble_device = async_ble_device_from_address(self.hass, address, connectable=True)
         if ble_device:
             logger.debug("Resolved BLEDevice: %s", ble_device.name)
-        else:
-            logger.debug("BLEDevice not found, using address string")
-        return ble_device or address
+            return ble_device
+
+        # MAC not found — try rediscovering by serial number
+        ble_device = self._rediscover_by_serial()
+        if ble_device:
+            new_address = ble_device.address.upper()
+            logger.warning(
+                "MAC address for %s changed: %s -> %s",
+                self.lock_name, address, new_address,
+            )
+            self._update_stored_address(new_address)
+            return ble_device
+
+        logger.debug("BLEDevice not found, using address string")
+        return address
+
+    def _rediscover_by_serial(self) -> object | None:
+        """Search HA's discovered devices for the lock by its service UUID."""
+        serial = self.serial
+        if not serial:
+            return None
+        try:
+            target_uuid = serial_to_service_uuid(serial).lower()
+        except ValueError:
+            return None
+        for info in async_discovered_service_info(self.hass):
+            if target_uuid in [str(u).lower() for u in info.service_uuids]:
+                logger.debug("Rediscovered %s at %s via service UUID", self.lock_name, info.address)
+                return info.device
+        return None
+
+    def _update_stored_address(self, new_address: str) -> None:
+        """Persist a new MAC address to the config entry."""
+        new_data = {**self.entry.data}
+        new_data[CONF_ADDRESS] = new_address
+        self.hass.config_entries.async_update_entry(self.entry, data=new_data)
 
     async def _connect(self) -> None:
         """Full connection sequence: cert refresh → BLE → PTLS → init."""
