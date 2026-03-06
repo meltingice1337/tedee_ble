@@ -4,8 +4,7 @@
 
 # Tedee BLE - Home Assistant Integration
 
-[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=meltingice1337&repository=tedee_ble&category=integration)
+[![HACS Default](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://hacs.xyz)
 
 Control your Tedee smart lock over **Bluetooth Low Energy** directly from Home Assistant.
 
@@ -53,10 +52,8 @@ Control your Tedee smart lock over **Bluetooth Low Energy** directly from Home A
 ### HACS (recommended)
 
 1. Open HACS in Home Assistant
-2. Click the three dots menu (top right) and select **Custom repositories**
-3. Add the repository URL and select **Integration** as the category
-4. Search for "Tedee BLE" and install
-5. Restart Home Assistant
+2. Search for **Tedee BLE** and install
+3. Restart Home Assistant
 
 ### Manual
 
