@@ -97,6 +97,7 @@ TRIGGER_BUTTON = 0x01       # Button press on lock
 TRIGGER_REMOTE = 0x02       # Remote (app/BLE command)
 TRIGGER_AUTO_LOCK = 0x04    # Auto-lock (after door closed)
 TRIGGER_DOOR_SENSOR = 0x10  # Door sensor state change
+TRIGGER_KEYPAD = 0x17       # Keypad PIN entry
 
 TRIGGER_NAMES = {
     0x00: "manual",
@@ -106,6 +107,7 @@ TRIGGER_NAMES = {
     0x05: "auto",
     0x08: "auto_unlock",
     0x10: "door_sensor",
+    0x17: "keypad",
 }
 
 # Notification IDs

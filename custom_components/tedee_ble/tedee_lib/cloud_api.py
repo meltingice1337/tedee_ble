@@ -140,7 +140,11 @@ class TedeeCloudAPI:
         return {"version": "", "updateAvailable": False}
 
     async def get_user_map(self, device_id: int) -> dict[int, str]:
-        """Build userId → username lookup from activity logs."""
+        """Build access ID → name lookup from activity logs.
+
+        Maps both regular userId → username and keypad accessLinkId → name.
+        Keypad events use accessLinkId/accessLinkName/pinAlias instead of userId.
+        """
         activities = await self.get_device_activity(device_id, limit=200)
         user_map: dict[int, str] = {}
         for a in activities:
@@ -148,6 +152,12 @@ class TedeeCloudAPI:
             name = a.get("username")
             if uid and name and uid not in user_map:
                 user_map[uid] = name
+            # Keypad PIN entries use accessLinkId instead of userId
+            link_id = a.get("accessLinkId")
+            if link_id and link_id not in user_map:
+                link_name = a.get("pinAlias") or a.get("accessLinkName")
+                if link_name:
+                    user_map[link_id] = link_name
         return user_map
 
 

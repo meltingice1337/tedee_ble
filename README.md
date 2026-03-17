@@ -110,9 +110,10 @@ The lock entity exposes two extra attributes - `last_trigger` and `last_user` - 
   - **button** - physical button press on the lock
   - **remote** - BLE command from Home Assistant or phone
   - **auto-lock** - the lock's built-in auto-lock timer
+  - **keypad** - PIN entry on a connected Tedee Keypad
   - **door sensor** - triggered by opening or closing the door
 
-- **last_user** tells you *who* triggered it, resolved from a user ID to a name. The integration builds a mapping of user IDs to names from the Tedee Cloud API activity logs. This map is automatically refreshed during periodic certificate renewals and whenever an unknown user is detected, so new shares are picked up without any manual action.
+- **last_user** tells you *who* triggered it, resolved from a user ID to a name. The integration builds a mapping of user IDs to names from the Tedee Cloud API activity logs (including keypad PIN aliases). This map is automatically refreshed during periodic certificate renewals and whenever an unknown user is detected, so new shares are picked up without any manual action.
 
 ## Dashboard card
 
