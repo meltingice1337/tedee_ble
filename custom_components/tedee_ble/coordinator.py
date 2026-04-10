@@ -12,6 +12,8 @@ from datetime import timedelta
 import logging
 import time
 
+from bleak import BleakScanner
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
@@ -157,6 +159,11 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
         try:
             await self._connect()
+        except asyncio.CancelledError:
+            logger.warning("Setup of %s was cancelled, will retry", self.lock_name)
+            raise ConfigEntryNotReady(
+                f"Connection to {self.lock_name} was cancelled (device may be updating)"
+            )
         except Exception as err:
             logger.error("Failed to connect to %s: %s", self.lock_name, err)
             raise ConfigEntryNotReady(
@@ -209,6 +216,36 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 return info.device
         return None
 
+    async def _active_scan_for_lock(self) -> object | None:
+        """Active BLE scan to find the lock by serial UUID (bypasses HA cache).
+
+        Used as fallback when cached discovery returns a stale MAC address,
+        e.g. after a firmware update changes the lock's BLE address.
+        """
+        serial = self.serial
+        if not serial:
+            return None
+        try:
+            target_uuid = serial_to_service_uuid(serial).lower()
+            logger.info(
+                "Active BLE scan for %s (UUID: %s)...",
+                self.lock_name, target_uuid,
+            )
+            devices = await BleakScanner.discover(timeout=10.0, return_adv=True)
+            for device, adv_data in devices.values():
+                service_uuids = [
+                    str(u).lower() for u in (adv_data.service_uuids or [])
+                ]
+                if target_uuid in service_uuids:
+                    logger.info(
+                        "Active scan found %s at %s",
+                        self.lock_name, device.address,
+                    )
+                    return device
+        except Exception:
+            logger.debug("Active BLE scan failed", exc_info=True)
+        return None
+
     def _update_stored_address(self, new_address: str) -> None:
         """Persist a new MAC address to the config entry."""
         new_data = {**self.entry.data}
@@ -230,11 +267,43 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             data = self.entry.data
 
             # Create BLE transport
+            ble_device = self._resolve_ble_device(data[CONF_ADDRESS])
             self._transport = TedeeBLETransport(
-                self._resolve_ble_device(data[CONF_ADDRESS]),
+                ble_device,
                 disconnect_callback=self._on_disconnect,
             )
-            await self._transport.connect()
+            try:
+                await self._transport.connect()
+            except Exception as connect_err:
+                rediscovered = self._rediscover_by_serial()
+                if rediscovered and rediscovered.address.upper() != data[CONF_ADDRESS]:
+                    new_addr = rediscovered.address.upper()
+                    logger.warning(
+                        "MAC address for %s changed: %s -> %s",
+                        self.lock_name, data[CONF_ADDRESS], new_addr,
+                    )
+                    self._update_stored_address(new_addr)
+                    self._transport = TedeeBLETransport(
+                        rediscovered,
+                        disconnect_callback=self._on_disconnect,
+                    )
+                    await self._transport.connect()
+                else:
+                    scanned = await self._active_scan_for_lock()
+                    if scanned and scanned.address.upper() != data[CONF_ADDRESS]:
+                        new_addr = scanned.address.upper()
+                        logger.warning(
+                            "MAC address for %s changed: %s -> %s (active scan)",
+                            self.lock_name, data[CONF_ADDRESS], new_addr,
+                        )
+                        self._update_stored_address(new_addr)
+                        self._transport = TedeeBLETransport(
+                            scanned,
+                            disconnect_callback=self._on_disconnect,
+                        )
+                        await self._transport.connect()
+                    else:
+                        raise connect_err
 
             # Create PTLS session and handshake
             private_key = pem_to_private_key(data[CONF_PRIVATE_KEY_PEM].encode())
