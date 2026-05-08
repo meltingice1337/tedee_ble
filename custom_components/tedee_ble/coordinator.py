@@ -59,6 +59,8 @@ from .tedee_lib.lock_commands import (
     LOCK_STATE_UNKNOWN,
     LOCK_STATE_UNLOCKING,
     STATUS_OK,
+    UNLOCK_NO_PULL,
+    UNLOCK_NONE,
     TedeeLock,
 )
 from .tedee_lib.ptls import (
@@ -644,8 +646,14 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         await self._send_command("lock")
 
     async def async_unlock(self, auto_pull: bool = False) -> None:
-        """Unlock the door. If auto_pull, also sends pull_spring after unlocking."""
-        await self._send_command("unlock")
+        """Unlock the door. If auto_pull, also sends pull_spring after unlocking.
+
+        When auto_pull is False we send UNLOCK_NO_PULL so the lock skips its own
+        configured auto-pull (the lock-side setting from the Tedee app would
+        otherwise still trigger a spring pull on a plain unlock).
+        """
+        unlock_mode = UNLOCK_NONE if auto_pull else UNLOCK_NO_PULL
+        await self._send_command("unlock", mode=unlock_mode)
         if auto_pull:
             # Wait for the notification loop to report UNLOCKED (no BLE commands)
             for _ in range(30):
@@ -662,7 +670,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         await self._send_command("pull_spring")
 
 
-    async def _send_command(self, command: str) -> None:
+    async def _send_command(self, command: str, **kwargs) -> None:
         """Send a command to the lock with error handling."""
         if not self.is_connected or self._lock is None:
             raise HomeAssistantError(f"Not connected to {self.lock_name}")
@@ -670,7 +678,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         async with self._command_lock:
             try:
                 method = getattr(self._lock, command)
-                await method()
+                await method(**kwargs)
                 self._last_ble_activity = time.monotonic()
             except Exception as err:
                 logger.error("Command %s failed on %s: %s", command, self.lock_name, err)
