@@ -24,7 +24,7 @@ from .const import (
     DOMAIN,
 )
 from .coordinator import TedeeCoordinator
-from .tedee_lib.lock_commands import DOOR_STATE_OPEN, DOOR_STATE_UNKNOWN
+from .tedee_lib.lock_commands import DOOR_STATE_OPEN, DOOR_STATE_UNKNOWN, LOCK_STATE_UPDATING
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class TedeeDoorSensor(CoordinatorEntity[TedeeCoordinator], BinarySensorEntity):
 
 
 class TedeeFirmwareUpdateSensor(CoordinatorEntity[TedeeCoordinator], BinarySensorEntity):
-    """Shows whether a firmware update is available for the lock."""
+    """Firmware update status — on while an update is available or being applied."""
 
     _attr_has_entity_name = True
     _attr_translation_key = "firmware_update"
@@ -100,5 +100,17 @@ class TedeeFirmwareUpdateSensor(CoordinatorEntity[TedeeCoordinator], BinarySenso
 
     @property
     def is_on(self) -> bool:
-        """Return True if a firmware update is available."""
-        return self._entry.data.get(CONF_UPDATE_AVAILABLE, False)
+        return (
+            self._entry.data.get(CONF_UPDATE_AVAILABLE, False)
+            or self.coordinator.state.lock_state == LOCK_STATE_UPDATING
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, str]:
+        if self.coordinator.state.lock_state == LOCK_STATE_UPDATING:
+            status = "updating"
+        elif self._entry.data.get(CONF_UPDATE_AVAILABLE, False):
+            status = "available"
+        else:
+            status = "idle"
+        return {"status": status}

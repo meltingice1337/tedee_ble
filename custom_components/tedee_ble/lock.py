@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.components.lock import LockEntity, LockEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -18,6 +19,7 @@ from .tedee_lib.lock_commands import (
     LOCK_STATE_LOCKED,
     LOCK_STATE_LOCKING,
     LOCK_STATE_UNLOCKING,
+    LOCK_STATE_UPDATING,
     STATUS_JAMMED,
 )
 
@@ -70,9 +72,13 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
         return self.coordinator.state.available
 
     @property
+    def _is_updating(self) -> bool:
+        return self.coordinator.state.lock_state == LOCK_STATE_UPDATING
+
+    @property
     def is_locked(self) -> bool | None:
         """Return True if the lock is locked."""
-        if not self.available:
+        if not self.available or self._is_updating:
             return None
         return self.coordinator.state.lock_state == LOCK_STATE_LOCKED
 
@@ -98,18 +104,28 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
             "last_action": self.coordinator.state.last_event_type or None,
             "last_trigger": self.coordinator.state.last_trigger,
             "last_user": self.coordinator.state.last_user,
+            "is_updating": self._is_updating,
         }
+
+    def _guard_updating(self) -> None:
+        if self._is_updating:
+            raise HomeAssistantError(
+                f"{self.coordinator.lock_name} is applying a firmware update"
+            )
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the door."""
+        self._guard_updating()
         await self.coordinator.async_lock()
 
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the door. Also pulls spring if auto_pull option is enabled."""
+        self._guard_updating()
         await self.coordinator.async_unlock(
             auto_pull=self.coordinator.entry.options.get(CONF_AUTO_PULL, False),
         )
 
     async def async_open(self, **kwargs: Any) -> None:
         """Open the door (pull spring)."""
+        self._guard_updating()
         await self.coordinator.async_open()

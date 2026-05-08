@@ -5,7 +5,7 @@
  * last trigger / user, and Lock / Unlock / Open action buttons.
  */
 
-const CARD_VERSION = "1.4.1";
+const CARD_VERSION = "1.5.0";
 
 class TedeeLockCard extends HTMLElement {
   /* ── lifecycle ─────────────────────────────────────────────── */
@@ -113,6 +113,13 @@ class TedeeLockCard extends HTMLElement {
           shackle: "closed",
           anim: "shake",
         };
+      case "updating":
+        return {
+          color: "#9c27b0",
+          label: "Updating…",
+          shackle: "closed",
+          anim: "pulse",
+        };
       default:
         return {
           color: "#9e9e9e",
@@ -198,10 +205,15 @@ class TedeeLockCard extends HTMLElement {
     const battState = this._stateOf(this._config.battery);
 
     const haState = lockState ? lockState.state : "unavailable";
-    // Use last_action attribute for finer states (e.g. partially_unlocked)
+    const isUpdating = !!(lockState && lockState.attributes && lockState.attributes.is_updating);
+    // Use last_action attribute for finer states (e.g. partially_unlocked).
+    // Updating overrides everything else so the card reflects the firmware-update lockout.
     const lastAction = lockState && lockState.attributes && lockState.attributes.last_action;
-    const state = lastAction && this._lockMeta(lastAction).label !== "Unavailable"
-      ? lastAction : haState;
+    const state = isUpdating
+      ? "updating"
+      : lastAction && this._lockMeta(lastAction).label !== "Unavailable"
+        ? lastAction
+        : haState;
     const meta = this._lockMeta(state);
 
     // Name
@@ -242,14 +254,12 @@ class TedeeLockCard extends HTMLElement {
     // Button visibility: only show actions that make sense for current state
     const transitioning = state === "locking" || state === "unlocking";
     const unavailable = state === "unavailable";
-    const btnDisabled = transitioning || unavailable;
+    const btnDisabled = transitioning || unavailable || isUpdating;
 
-    // Lock → show when unlocked / partially unlocked (or jammed)
-    const showLock = state === "unlocked" || state === "partially_unlocked" || state === "jammed";
-    // Unlock → show when locked (or jammed)
-    const showUnlock = state === "locked" || state === "jammed";
-    // Open (pull spring) → only when already unlocked / partially unlocked
-    const showOpen = state === "unlocked" || state === "partially_unlocked";
+    // While updating, hide all action buttons — the lock will reject them anyway.
+    const showLock = !isUpdating && (state === "unlocked" || state === "partially_unlocked" || state === "jammed");
+    const showUnlock = !isUpdating && (state === "locked" || state === "jammed");
+    const showOpen = !isUpdating && (state === "unlocked" || state === "partially_unlocked");
 
     this.shadowRoot.innerHTML = `
       <style>
