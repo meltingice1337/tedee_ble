@@ -36,15 +36,16 @@ Control your Tedee smart lock over **Bluetooth Low Energy** directly from Home A
 
 ## Features
 
-- **Lock, Unlock, and Open** - Full lock control including pull spring (open latch) support
-- **Auto-pull on unlock** - Optional setting to automatically pull the spring when unlocking, so the door unlatches in one step
+- **Lock, Unlock, and Open** - Full lock control including pull spring (open latch) support. The lock entity also surfaces transitional states like `locking`, `unlocking`, `partially_unlocked`, and `jammed`
+- **Auto-pull on unlock** - Optional setting; when **disabled**, the integration sends `UNLOCK_NO_PULL` so the lock-side auto-pull setting (configured in the Tedee mobile app) is overridden — the Home Assistant toggle is the single source of truth for spring-pull behavior
 - **Door open/closed sensor** - If your Tedee lock has the optional **door sensor** accessory installed, the integration exposes a binary sensor showing whether the door is open or closed
-- **Battery monitoring** - See the current battery level and whether the lock is charging
-- **Real-time state updates** - Lock state changes (locked, unlocked, jammed, door opened) are pushed instantly via BLE notifications, no polling needed
+- **Battery monitoring** - Battery percentage as a sensor, with a `charging` attribute exposed alongside it
+- **Real-time state updates** - Lock state changes are pushed instantly via BLE notifications, with a 10-minute polling safety net and a 45-second keep-alive
 - **Jam detection** - The lock reports if it gets jammed during locking or unlocking
 - **Activity tracking** - See who triggered the last action and how (see [details below](#activity-tracking))
-- **Firmware version and update status** - Firmware version shown on the device page, plus a binary sensor indicating when a firmware update is available (refreshed from the Tedee Cloud API)
-- **Persistent connection with auto-reconnect** - The integration maintains a live BLE connection and automatically reconnects if it drops, with a grace period that hides brief reconnections from the UI
+- **Firmware-update awareness** - Firmware version shown on the device page; a diagnostic binary sensor turns on when an update is available (per cloud API) **or** while the lock is actively applying one. The lock entity exposes `is_updating: true` during a flash and rejects `lock` / `unlock` / `open` service calls so automations don't fire mid-update
+- **Persistent connection with auto-reconnect** - The integration maintains a live BLE connection and automatically reconnects if it drops (forever, with backoff), with a grace period that hides brief reconnections from the UI
+- **MAC-address auto-recovery** - If a firmware update changes the lock's BLE MAC, the integration rediscovers it by service UUID and updates the stored address — no reconfigure or HA restart needed
 - **Direct BLE and ESPHome Bluetooth Proxy** - Connect directly from your Home Assistant host's Bluetooth adapter, or route through an [ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/) for extended range
 - **Custom dashboard card** - A built-in Lovelace card with animated status icons, smart action buttons, and at-a-glance info
 
@@ -87,7 +88,7 @@ The integration needs a Tedee Personal Access Key to register with the lock and 
 
 After setup, click the **Configure** button on the integration to adjust:
 
-- **Auto-pull on unlock** - When enabled, unlocking the lock will also automatically pull the spring to unlatch the door. When disabled, unlock and open are separate actions.
+- **Auto-pull on unlock** - When enabled, unlocking the lock will also automatically pull the spring to unlatch the door. When disabled, the integration sends `UNLOCK_NO_PULL` to the lock, which **overrides** the lock-side auto-pull setting from the Tedee mobile app — so the HA toggle alone determines whether the spring pulls. Takes effect on the next unlock; no reload required.
 
 ## Entities
 
@@ -95,25 +96,29 @@ The integration creates the following entities per lock, all grouped under a sin
 
 | Entity | Type | Description |
 |--------|------|-------------|
-| **Lock** | `lock` | Lock, unlock, and open (pull spring). Shows locking, unlocking, and jammed states. |
+| **Lock** | `lock` | Lock, unlock, and open (pull spring). Surfaces `locking`, `unlocking`, `partially_unlocked`, and `jammed` states. Exposes `last_action`, `last_trigger`, `last_user`, and `is_updating` as attributes. |
 | **Door** | `binary_sensor` | Door open/closed state. Requires the optional **Tedee door sensor** accessory to be installed on the lock. |
-| **Battery** | `sensor` | Battery percentage and charging status |
-| **Firmware update** | `binary_sensor` | Whether a firmware update is available for the lock (diagnostic) |
+| **Battery** | `sensor` | Battery percentage. Exposes a `charging` attribute (diagnostic). |
+| **Firmware update** | `binary_sensor` | On while a firmware update is available **or** being applied. Exposes a `status` attribute (`available` / `updating` / `idle`). Diagnostic. |
+
+Each lock-state change also fires a `tedee_ble_lock_action` event on the bus (with `action`, `trigger`, `user`, `entity_id`, `lock_name`) — useful for automations and the logbook.
 
 The **firmware version** is shown on the device info page (Settings > Devices > your lock), not as a separate entity.
 
 ### Activity tracking
 
-The lock entity exposes two extra attributes - `last_trigger` and `last_user` - showing what caused the most recent state change:
+The lock entity exposes three attributes describing the most recent state change:
 
-- **last_trigger** tells you *how* it was triggered:
-  - **button** - physical button press on the lock
-  - **remote** - BLE command from Home Assistant or phone
-  - **auto-lock** - the lock's built-in auto-lock timer
-  - **keypad** - PIN entry on a connected Tedee Keypad
-  - **door sensor** - triggered by opening or closing the door
-
-- **last_user** tells you *who* triggered it, resolved from a user ID to a name. The integration builds a mapping of user IDs to names from the Tedee Cloud API activity logs (including keypad PIN aliases). This map is automatically refreshed during periodic certificate renewals and whenever an unknown user is detected, so new shares are picked up without any manual action.
+- **`last_action`** - the resulting state, e.g. `locked`, `unlocked`, `partially_unlocked`, `pulling`. The dashboard card uses this to render fine-grained states the core `lock` domain doesn't surface.
+- **`last_trigger`** tells you *how* it was triggered. The exact tokens you'll see in the attribute are:
+  - `button` - physical button press on the lock
+  - `remote` - BLE command from Home Assistant or phone
+  - `keypad` - PIN entry on a connected Tedee Keypad
+  - `auto_lock` - the lock's built-in auto-lock timer
+  - `auto_unlock` / `auto` - auto-unlock feature
+  - `door_sensor` - triggered by opening or closing the door
+  - `manual` - turned by hand
+- **`last_user`** tells you *who* triggered it, resolved from a user ID to a name. The integration builds a mapping of user IDs to names from the Tedee Cloud API activity logs (including keypad PIN aliases). This map is automatically refreshed during periodic certificate renewals and whenever an unknown user is detected, so new shares are picked up without any manual action.
 
 ## Dashboard card
 
@@ -130,60 +135,55 @@ The card is **auto-registered** on startup - no need to add it as a resource man
 ```yaml
 type: custom:tedee-lock-card
 lock: lock.lock_lock
-door: binary_sensor.lock_door      # optional
+door: binary_sensor.lock_door       # optional
 battery: sensor.lock_battery        # optional
+event: sensor.lock_last_event       # optional — entity opened when the activity row is clicked
 name: Front Door                    # optional, overrides entity name
+show_activity: true                 # optional, default true — set false to hide the activity row
 ```
 
 **What it shows:**
-- State-colored lock icon (green = locked, amber = unlocked, blue = transitioning, red = jammed, grey = unavailable)
-- Animated icon (pulse during locking/unlocking, shake when jammed)
-- Smart buttons - only shows actions that make sense (e.g. "Open" only appears when unlocked)
+- State-colored lock icon (green = locked, amber = unlocked, blue = transitioning, red = jammed, **purple = applying firmware update**, grey = unavailable)
+- Animated icon (pulse during locking/unlocking and during firmware update, shake when jammed)
+- Smart buttons - only shows actions that make sense (e.g. "Open" only appears when unlocked); **all buttons are hidden while the lock is applying a firmware update**
 - Door state and battery chips - click to open their respective entity dialogs
 - Last user and trigger source (button press, remote command, auto-lock, door sensor)
 
 ## How it works
 
-**Direct BLE connection:**
+**Direct BLE connection** — Home Assistant talks to the lock directly over encrypted BLE; an HTTPS path to the Tedee Cloud API is used only for the periodic certificate refresh.
 
-```
-┌─────────────┐      BLE       ┌──────────────┐
-│   Home      │◄──────────────►│  Tedee Lock  │
-│   Assistant │  Encrypted     │  (GO 2)      │
-└──────┬──────┘                └──────────────┘
-       │
-       │ HTTPS (certificate refresh only,
-       │        every few days)
-       │
-┌──────▼──────┐
-│ Tedee Cloud │
-│    API      │
-└─────────────┘
+```mermaid
+flowchart LR
+    HA["Home Assistant"]
+    Lock["Tedee Lock<br/>(GO 2)"]
+    Cloud["Tedee Cloud API"]
+
+    HA <-->|"BLE (encrypted)"| Lock
+    HA -.->|"HTTPS<br/>(cert refresh, every few days)"| Cloud
 ```
 
-**Via ESPHome Bluetooth Proxy:**
+**Via ESPHome Bluetooth Proxy** — Home Assistant reaches an ESP32 BLE proxy over Wi-Fi, which relays encrypted BLE to the lock. The cloud path is unchanged.
 
-```
-┌─────────────┐    Wi-Fi     ┌──────────────┐     BLE      ┌──────────────┐
-│   Home      │◄────────────►│   ESPHome    │◄────────────►│  Tedee Lock  │
-│   Assistant │              │  BLE Proxy   │  Encrypted   │  (GO 2)      │
-└──────┬──────┘              │  (ESP32)     │              └──────────────┘
-       │                     └──────────────┘
-       │ HTTPS (certificate refresh only,
-       │        every few days)
-       │
-┌──────▼──────┐
-│ Tedee Cloud │
-│    API      │
-└─────────────┘
+```mermaid
+flowchart LR
+    HA["Home Assistant"]
+    Proxy["ESPHome BLE Proxy<br/>(ESP32)"]
+    Lock["Tedee Lock<br/>(GO 2)"]
+    Cloud["Tedee Cloud API"]
+
+    HA <-->|"Wi-Fi"| Proxy
+    Proxy <-->|"BLE (encrypted)"| Lock
+    HA -.->|"HTTPS<br/>(cert refresh, every few days)"| Cloud
 ```
 
 1. **Device Registration** - The integration registers with Tedee's Cloud API and obtains a signed certificate for BLE authentication
-2. **BLE Discovery** - The integration scans for your lock over Bluetooth (directly or through an ESPHome proxy)
+2. **BLE Discovery** - The integration scans for your lock over Bluetooth (directly or through an ESPHome proxy), filtering by the lock's service UUID derived from its serial number
 3. **Encrypted Session** - A secure, encrypted BLE session is established using the certificate
-4. **Persistent Connection** - The integration maintains a persistent BLE connection with keep-alive pings (the lock disconnects after ~25-45s of inactivity)
+4. **Persistent Connection** - The integration maintains a persistent BLE connection with a 45-second keep-alive (the lock drops idle connections after ~25-45 s of inactivity), plus a 10-minute polling safety net
 5. **Real-time Notifications** - Lock state changes are pushed instantly via BLE notifications
-6. **Automatic Reconnection** - If the BLE connection drops, the integration reconnects automatically with exponential backoff (2s, 5s, 10s, 30s, 60s). A 15-second grace period prevents brief reconnections from showing entities as "unavailable"
+6. **Automatic Reconnection** - If the BLE connection drops, the integration reconnects automatically with backoff: 2 s, 5 s, 10 s, 30 s, then every 60 s thereafter (forever). A 15-second grace period prevents brief reconnections from showing entities as "unavailable"
+7. **MAC-Address Recovery** - If the lock's BLE MAC changes (e.g. after a firmware update), the integration first checks Home Assistant's discovery cache by service UUID; if that misses, it falls back to a live active BLE scan and silently updates the stored address. No HA restart or reconfigure is required
 
 ## Troubleshooting
 
@@ -197,6 +197,10 @@ name: Front Door                    # optional, overrides entity name
 - The Tedee lock (especially the GO model) drops idle BLE connections after ~25-45 seconds. This is normal battery-saving behavior. The integration reconnects automatically in ~2-5 seconds, and a grace period prevents entities from briefly showing as "unavailable"
 - If entities stay unavailable for longer periods, check BLE range - move the HA host closer, or use an [ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/) placed near the lock
 - Interference from other 2.4GHz devices (Wi-Fi, Zigbee) can cause disconnections
+
+### Stuck unavailable after a firmware update
+- Firmware updates put the lock offline for a few minutes and can change its BLE MAC. The integration's reconnect loop will pick it up automatically once the lock starts advertising again
+- If you don't want to wait, click **Reload** on the Tedee BLE integration (Settings → Devices & Services → Tedee BLE → ⋯ → Reload). This re-runs setup, which rediscovers the lock by service UUID and updates the stored MAC
 
 ### Certificate errors
 - The integration auto-refreshes certificates. If you see persistent errors, remove and re-add the integration
