@@ -45,6 +45,7 @@ from .const import (
     EVENT_LOCK_ACTION,
     KEEPALIVE_INTERVAL_SECONDS,
     POLL_INTERVAL_SECONDS,
+    PROXY_EXHAUSTED_DELAY_INDEX,
     RECONNECT_DELAYS,
     UNAVAILABLE_GRACE_SECONDS,
 )
@@ -489,6 +490,13 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 self.state.available = False
                 self.async_set_updated_data(self.state)
             if not self._shutting_down:
+                # If the proxy is out of connection slots, retrying every 60s
+                # only keeps it busy and prevents recovery. Jump ahead in the
+                # backoff ladder so the proxy gets room to breathe.
+                if "no backend with an available connection slot" in str(err).lower():
+                    self._reconnect_attempt = max(
+                        self._reconnect_attempt, PROXY_EXHAUSTED_DELAY_INDEX
+                    )
                 # Drop the self-reference so _schedule_reconnect's "already scheduled"
                 # guard doesn't see this still-running task and bail out.
                 self._reconnect_task = None

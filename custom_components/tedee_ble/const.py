@@ -28,7 +28,10 @@ DEVICE_TYPE_MODELS = {
 }
 
 # Coordinator
-RECONNECT_DELAYS = [2, 5, 10, 30, 60]
+RECONNECT_DELAYS = [2, 5, 10, 30, 60, 120, 300, 600]
+# When the proxy reports it's out of connection slots, jump to this index in
+# RECONNECT_DELAYS so we back off hard instead of hammering every 60s.
+PROXY_EXHAUSTED_DELAY_INDEX = 6  # → 300s (5 min)
 POLL_INTERVAL_SECONDS = 600  # 10 minutes
 KEEPALIVE_INTERVAL_SECONDS = 45  # BLE keep-alive (lock disconnects after ~25-45s idle on GO)
 UNAVAILABLE_GRACE_SECONDS = 15  # Don't mark unavailable until reconnect fails this long
