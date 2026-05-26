@@ -56,6 +56,8 @@ from .tedee_lib.lock_commands import (
     DOOR_STATE_UNKNOWN,
     LOCK_STATE_LOCKED,
     LOCK_STATE_LOCKING,
+    LOCK_STATE_PULL_SPRING,
+    LOCK_STATE_PULLING,
     LOCK_STATE_UNLOCKED,
     LOCK_STATE_UNKNOWN,
     LOCK_STATE_UNLOCKING,
@@ -662,19 +664,37 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         When auto_pull is False we send UNLOCK_NO_PULL so the lock skips its own
         configured auto-pull (the lock-side setting from the Tedee app would
         otherwise still trigger a spring pull on a plain unlock).
+
+        When auto_pull is True we send UNLOCK_NONE, which lets the lock's own
+        firmware auto-pull setting run if enabled. We then watch the state:
+        if the firmware starts pulling on its own (PULL_SPRING / PULLING) we
+        skip our redundant pull_spring command (which would return BUSY).
+        Only if the lock settles at UNLOCKED without firmware auto-pull do we
+        send pull_spring ourselves.
         """
         unlock_mode = UNLOCK_NONE if auto_pull else UNLOCK_NO_PULL
         await self._send_command("unlock", mode=unlock_mode)
-        if auto_pull:
-            # Wait for the notification loop to report UNLOCKED (no BLE commands)
-            for _ in range(30):
-                await asyncio.sleep(0.5)
-                if self.state.lock_state == LOCK_STATE_UNLOCKED:
+        if not auto_pull:
+            return
+
+        unlocked_since: float | None = None
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            await asyncio.sleep(0.1)
+            if not self.is_connected:
+                break
+            state = self.state.lock_state
+            if state in (LOCK_STATE_PULL_SPRING, LOCK_STATE_PULLING):
+                return
+            if state == LOCK_STATE_UNLOCKED:
+                if unlocked_since is None:
+                    unlocked_since = time.monotonic()
+                elif time.monotonic() - unlocked_since >= 1.0:
                     await self._send_command("pull_spring")
                     return
-                if not self.is_connected:
-                    break
-            logger.warning("Auto-pull: lock did not reach unlocked state within 15s")
+            else:
+                unlocked_since = None
+        logger.warning("Auto-pull: lock did not reach a pull/unlocked state within 15s")
 
     async def async_open(self) -> None:
         """Pull the spring (open)."""
