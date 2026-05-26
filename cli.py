@@ -698,6 +698,7 @@ async def cmd_shell(args):
                 print("  status          - Lock state + battery")
                 print("  state           - Lock state only")
                 print("  battery         - Battery only")
+                print("  door            - Active door-sensor read (GET_DOOR_STATE 0x37)")
                 print("  reconnect       - Force reconnect")
                 print("  quit            - Exit")
                 continue
@@ -745,6 +746,13 @@ async def cmd_shell(args):
                     level, charging = await lock.get_battery()
                     charge_str = " (charging)" if charging else ""
                     print(f"  {level}%{charge_str}")
+                elif cmd == "door":
+                    try:
+                        door_state = await lock.get_door_state()
+                        name = DOOR_STATE_NAMES.get(door_state, f"0x{door_state:02x}")
+                        print(f"  Door state: {name} (0x{door_state:02x})")
+                    except Exception as e:
+                        print(f"  GET_DOOR_STATE failed: {e}")
                 elif cmd == "reconnect":
                     if transport.is_connected:
                         await transport.disconnect()

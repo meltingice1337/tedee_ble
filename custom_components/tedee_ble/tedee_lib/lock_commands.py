@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Command opcodes
 CMD_GET_BATTERY = 0x0C
+CMD_GET_DOOR_STATE = 0x37
 CMD_LOCK = 0x50
 CMD_UNLOCK = 0x51
 CMD_PULL_SPRING = 0x52
@@ -258,6 +259,28 @@ class TedeeLock:
 
         logger.info("Battery: %d%%, Charging: %s", level, is_charging)
         return level, is_charging
+
+    async def get_door_state(self) -> int:
+        """Get current door sensor state (GET_DOOR_STATE 0x37).
+
+        Response format: [result_code][door_state_byte]. Raises CommandError
+        if the lock has no paired door sensor (firmware returns non-success).
+        Also updates self.door_state on success so subsequent get_state()
+        calls return the fresh value.
+        """
+        command = bytes([CMD_GET_DOOR_STATE])
+        logger.debug("Getting door state...")
+        response = await self._send_command(command)
+
+        result = response[0]
+        if result != RESULT_SUCCESS:
+            raise CommandError(result)
+
+        door_state = response[1] if len(response) > 1 else DOOR_STATE_UNKNOWN
+        self.door_state = door_state
+        name = DOOR_STATE_NAMES.get(door_state, f"0x{door_state:02x}")
+        logger.info("Door state: %s", name)
+        return door_state
 
     async def parse_notification(self, data: bytes) -> dict | None:
         """Parse a notification from the lock.

@@ -398,6 +398,16 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             except Exception:
                 logger.warning("Failed to get initial battery", exc_info=True)
 
+            # Active door-state read — get_state only reports door state via the
+            # cached value from the 0xBA notification, which is empty on cold
+            # start. GET_DOOR_STATE (0x37) returns the live sensor value.
+            try:
+                door_state = await self._lock.get_door_state()
+                if door_state != DOOR_STATE_UNKNOWN:
+                    self.state.door_state = door_state
+            except Exception:
+                logger.debug("Failed to get initial door state (no door sensor?)", exc_info=True)
+
             # Mark available and notify entities
             self.state.available = True
             self._reconnect_attempt = 0
