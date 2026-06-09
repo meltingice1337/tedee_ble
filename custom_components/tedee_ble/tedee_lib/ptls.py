@@ -153,6 +153,51 @@ class PTLSSession:
         await self._wait_initialized()
         logger.info("PTLS session established (ID: %s)", self.session_id.hex())
 
+    async def _read_ptls_frame(self, expected: int, timeout: float = 10.0) -> bytes:
+        """Read the next PTLS TX frame with header `expected`, skipping stale ones.
+
+        The lock (or the host BLE stack) sometimes re-delivers a handshake
+        notification many times. Because TX frames are consumed from a FIFO queue,
+        leftover duplicates of an already-handled step can sit ahead of the frame
+        we actually want, so a naive read pops the wrong one (e.g. a repeated server
+        HELLO instead of the SERVER_VERIFY response — header 0x03 vs 0x05). Skip any
+        frame that is neither the expected header nor an alert, bounded by an overall
+        deadline so a relentless duplicate storm still fails instead of hanging.
+        """
+        deadline = time.monotonic() + timeout
+        skipped = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PTLSError(
+                    f"Timed out waiting for PTLS header 0x{expected:02x} "
+                    f"(skipped {skipped} stale frame(s))"
+                )
+            try:
+                response = await self.transport.read_ptls_tx(timeout=remaining)
+            except asyncio.TimeoutError as e:
+                raise PTLSError(
+                    f"Timed out waiting for PTLS header 0x{expected:02x} "
+                    f"(skipped {skipped} stale frame(s))"
+                ) from e
+
+            header = response[0] & 0x0F
+            if header == PTLS_ALERT:
+                raise PTLSAlertError(response[1] if len(response) > 1 else 0xFF)
+            if header == expected:
+                if skipped:
+                    logger.warning(
+                        "Skipped %d stale/duplicate PTLS frame(s) before header 0x%02x",
+                        skipped, expected,
+                    )
+                return response
+
+            skipped += 1
+            logger.debug(
+                "Ignoring unexpected PTLS frame: got 0x%02x, want 0x%02x (skip #%d)",
+                header, expected, skipped,
+            )
+
     async def _hello_exchange(self) -> bytes:
         """Exchange hello messages with the lock."""
         # Generate ephemeral ECDH key pair
@@ -184,15 +229,8 @@ class PTLSSession:
         # Send with PTLS_HELLO header
         await self.transport.write_ptls_rx(bytes([PTLS_HELLO]) + client_hello_payload)
 
-        # Receive server hello
-        response = await self.transport.read_ptls_tx()
-        header = response[0] & 0x0F
-
-        if header == PTLS_ALERT:
-            raise PTLSAlertError(response[1] if len(response) > 1 else 0xFF)
-        if header != PTLS_HELLO:
-            raise PTLSError(f"Expected PTLS_HELLO (0x03), got 0x{header:02x}")
-
+        # Receive server hello (skipping any stale/duplicate frames)
+        response = await self._read_ptls_frame(PTLS_HELLO)
         server_hello_payload = response[1:]
         if len(server_hello_payload) < 100:
             raise PTLSError(
@@ -235,15 +273,8 @@ class PTLSSession:
             self._shared_secret, "ptlss hs traffic", hello_hash
         )
 
-        # Receive encrypted server verify response
-        response = await self.transport.read_ptls_tx()
-        header = response[0] & 0x0F
-
-        if header == PTLS_ALERT:
-            raise PTLSAlertError(response[1] if len(response) > 1 else 0xFF)
-        if header != PTLS_SERVER_VERIFY:
-            raise PTLSError(f"Expected PTLS_SERVER_VERIFY (0x05), got 0x{header:02x}")
-
+        # Receive encrypted server verify response (skipping stale/duplicate frames)
+        response = await self._read_ptls_frame(PTLS_SERVER_VERIFY)
         encrypted_data = response[1:]
 
         try:
@@ -358,13 +389,7 @@ class PTLSSession:
 
     async def _wait_initialized(self) -> None:
         """Wait for PTLS_INITIALIZED response and derive application keys."""
-        response = await self.transport.read_ptls_tx()
-        header = response[0] & 0x0F
-
-        if header == PTLS_ALERT:
-            raise PTLSAlertError(response[1] if len(response) > 1 else 0xFF)
-        if header != PTLS_INITIALIZED:
-            raise PTLSError(f"Expected PTLS_INITIALIZED (0x08), got 0x{header:02x}")
+        response = await self._read_ptls_frame(PTLS_INITIALIZED)
 
         # Extract 4-byte session ID
         self.session_id = response[1:5]
