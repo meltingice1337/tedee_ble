@@ -1,9 +1,17 @@
 {
     "config": {
+        "flow_title": "{name}",
         "step": {
             "user": {
                 "title": "Tedee Cloud API",
                 "description": "Introdu cheia ta personala de acces Tedee. O poti crea pe [portalul Tedee]({tedee_portal_url}) la sectiunea Personal Access Keys.",
+                "data": {
+                    "api_key": "Cheie de acces personala"
+                }
+            },
+            "bluetooth_confirm": {
+                "title": "Incuietoare Tedee gasita",
+                "description": "Am gasit **{name}** in apropiere. Introdu cheia ta personala de acces Tedee pentru a finaliza configurarea. O poti crea pe [portalul Tedee]({tedee_portal_url}) la sectiunea Personal Access Keys.",
                 "data": {
                     "api_key": "Cheie de acces personala"
                 }
@@ -38,6 +46,7 @@
         "abort": {
             "all_locks_configured": "Toate incuietorile din acest cont sunt deja configurate.",
             "already_configured": "Aceasta incuietoare este deja configurata.",
+            "not_supported": "Acest dispozitiv Tedee nu este o incuietoare suportata.",
             "registration_failed": "Inregistrarea cu Tedee cloud a esuat. Verifica jurnalele pentru detalii."
         }
     },

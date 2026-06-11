@@ -8,6 +8,7 @@ import re
 import voluptuous as vol
 from bleak import BleakScanner
 
+from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 
 from .const import (
@@ -30,7 +31,7 @@ from .const import (
     DEVICE_TYPE_MODELS,
     DOMAIN,
 )
-from .tedee_lib.ble import serial_to_service_uuid
+from .tedee_lib.ble import serial_to_service_uuid, service_uuid_to_serial
 from .tedee_lib.cloud_api import CloudAPIError, TedeeCloudAPI
 from .tedee_lib.crypto import (
     generate_ecdsa_keypair,
@@ -82,6 +83,49 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._locks: list[dict] = []
         self._selected_lock: dict = {}
         self._address: str = ""
+        # Set when the flow is started from a Bluetooth discovery.
+        self._discovered_serial: str = ""
+        self._discovered_address: str = ""
+        self._discovered_name: str = ""
+
+    async def _async_fetch_locks(
+        self, api_key: str
+    ) -> tuple[list[dict] | None, str | None]:
+        """Fetch the account's locks. Returns (locks, error_key)."""
+        try:
+            async with TedeeCloudAPI(api_key) as api:
+                locks = await api.get_devices()
+        except CloudAPIError as err:
+            logger.error("Cloud API error: %s", err)
+            if err.status_code in (401, 403):
+                return None, "invalid_api_key"
+            return None, "cannot_connect"
+        except Exception:
+            logger.exception("Unexpected error connecting to Tedee Cloud")
+            return None, "cannot_connect"
+        if not locks:
+            return None, "no_locks_found"
+        return locks, None
+
+    async def _async_route_after_locks(self) -> ConfigFlowResult:
+        """After the API key validates, pick the next step.
+
+        When the flow came from a Bluetooth discovery, auto-select the matching
+        cloud lock and use the discovered MAC, skipping the manual picker/scan.
+        """
+        if self._discovered_serial:
+            for lock in self._locks:
+                serial = lock.get("serialNumber", "").replace("-", "")
+                if serial == self._discovered_serial:
+                    self._selected_lock = lock
+                    self._address = self._discovered_address
+                    return await self.async_step_register()
+            # Discovered lock isn't on this account; fall back to the picker.
+            logger.warning(
+                "Discovered lock %s not found on this Tedee account",
+                self._discovered_serial,
+            )
+        return await self.async_step_select_lock()
 
     async def async_step_user(
         self, user_input: dict | None = None
@@ -91,25 +135,13 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             api_key = user_input[CONF_API_KEY].strip()
-            try:
-                async with TedeeCloudAPI(api_key) as api:
-                    locks = await api.get_devices()
-            except CloudAPIError as err:
-                logger.error("Cloud API error: %s", err)
-                if err.status_code in (401, 403):
-                    errors["base"] = "invalid_api_key"
-                else:
-                    errors["base"] = "cannot_connect"
-            except Exception:
-                logger.exception("Unexpected error connecting to Tedee Cloud")
-                errors["base"] = "cannot_connect"
+            locks, error = await self._async_fetch_locks(api_key)
+            if error:
+                errors["base"] = error
             else:
-                if not locks:
-                    errors["base"] = "no_locks_found"
-                else:
-                    self._api_key = api_key
-                    self._locks = locks
-                    return await self.async_step_select_lock()
+                self._api_key = api_key
+                self._locks = locks
+                return await self._async_route_after_locks()
 
         return self.async_show_form(
             step_id="user",
@@ -120,6 +152,64 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
             errors=errors,
             description_placeholders={
+                "tedee_portal_url": "https://portal.tedee.com/",
+            },
+        )
+
+    async def async_step_bluetooth(
+        self, discovery_info: BluetoothServiceInfoBleak
+    ) -> ConfigFlowResult:
+        """Handle a lock surfaced by Home Assistant's Bluetooth discovery."""
+        serial = next(
+            (
+                s
+                for uuid in discovery_info.service_uuids
+                if (s := service_uuid_to_serial(uuid))
+            ),
+            None,
+        )
+        if serial is None:
+            return self.async_abort(reason="not_supported")
+
+        # Collapse duplicate discoveries (multiple adapters/proxies) by serial.
+        await self.async_set_unique_id(serial)
+        self._abort_if_unique_id_configured()
+        for entry in self._async_current_entries():
+            if entry.data.get(CONF_SERIAL, "").replace("-", "") == serial:
+                return self.async_abort(reason="already_configured")
+
+        self._discovered_serial = serial
+        self._discovered_address = discovery_info.address
+        self._discovered_name = discovery_info.name or f"Tedee {serial}"
+        self.context["title_placeholders"] = {"name": self._discovered_name}
+        return await self.async_step_bluetooth_confirm()
+
+    async def async_step_bluetooth_confirm(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        """Confirm a discovered lock and collect the API key to finish."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            api_key = user_input[CONF_API_KEY].strip()
+            locks, error = await self._async_fetch_locks(api_key)
+            if error:
+                errors["base"] = error
+            else:
+                self._api_key = api_key
+                self._locks = locks
+                return await self._async_route_after_locks()
+
+        return self.async_show_form(
+            step_id="bluetooth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_API_KEY): str,
+                }
+            ),
+            errors=errors,
+            description_placeholders={
+                "name": self._discovered_name,
                 "tedee_portal_url": "https://portal.tedee.com/",
             },
         )

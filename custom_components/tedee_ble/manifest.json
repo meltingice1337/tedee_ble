@@ -1,6 +1,12 @@
 {
     "domain": "tedee_ble",
     "name": "Tedee BLE",
+    "bluetooth": [
+        {
+            "connectable": true,
+            "service_uuid": "00000002-4899-489f-a301-fbee544b1db0"
+        }
+    ],
     "codeowners": ["@meltingice1337"],
     "config_flow": true,
     "dependencies": ["bluetooth", "frontend", "http", "lovelace"],

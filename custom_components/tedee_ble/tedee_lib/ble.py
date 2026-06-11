@@ -35,6 +35,26 @@ def serial_to_service_uuid(serial: str) -> str:
     )
 
 
+def service_uuid_to_serial(uuid: str) -> str | None:
+    """Reverse of serial_to_service_uuid.
+
+    Extract the 14-digit serial from a Tedee per-device advertising UUID
+    (e.g. ``12340000-5678-9012-3400-000000000000`` -> ``12345678901234``).
+    Returns None for any UUID that doesn't match the per-device shape, so it
+    safely ignores the fixed family UUID and standard GAP/GATT services.
+    """
+    parts = uuid.lower().split("-")
+    if len(parts) != 5:
+        return None
+    g1, g2, g3, g4, g5 = parts
+    if not (g1.endswith("0000") and g4.endswith("00") and g5 == "000000000000"):
+        return None
+    serial = g1[0:4] + g2 + g3 + g4[0:2]
+    if len(serial) != 14 or not serial.isdigit():
+        return None
+    return serial
+
+
 class TedeeBLETransport:
     """BLE transport for communicating with a Tedee lock."""
 

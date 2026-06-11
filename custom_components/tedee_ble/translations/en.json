@@ -1,9 +1,17 @@
 {
     "config": {
+        "flow_title": "{name}",
         "step": {
             "user": {
                 "title": "Tedee Cloud API",
                 "description": "Enter your Tedee Personal Access Key. You can create one at [the Tedee portal]({tedee_portal_url}) under Personal Access Keys.",
+                "data": {
+                    "api_key": "Personal Access Key"
+                }
+            },
+            "bluetooth_confirm": {
+                "title": "Tedee lock found",
+                "description": "Discovered **{name}** nearby. Enter your Tedee Personal Access Key to finish setup. You can create one at [the Tedee portal]({tedee_portal_url}) under Personal Access Keys.",
                 "data": {
                     "api_key": "Personal Access Key"
                 }
@@ -38,6 +46,7 @@
         "abort": {
             "all_locks_configured": "All locks on this account are already configured.",
             "already_configured": "This lock is already configured.",
+            "not_supported": "This Tedee device is not a supported lock.",
             "registration_failed": "Registration with Tedee cloud failed. Check the logs for details."
         }
     },
