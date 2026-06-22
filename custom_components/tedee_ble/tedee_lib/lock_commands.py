@@ -8,9 +8,10 @@ import asyncio
 import base64
 import logging
 import struct
+import time
 
 from .ble import TedeeBLETransport
-from .ptls import PTLSSession
+from .ptls import PTLSError, PTLSSession
 
 logger = logging.getLogger(__name__)
 
@@ -142,18 +143,59 @@ class TedeeLock:
         self._consecutive_decrypt_failures: int = 0
 
     async def _send_command(self, command: bytes, timeout: float = 10.0) -> bytes:
-        """Send an encrypted command and receive the response."""
-        logger.debug("Sending command: opcode=0x%02x, len=%d", command[0], len(command))
+        """Send an encrypted command and receive its response.
+
+        The lock's API responses are sometimes delivered twice by BlueZ/proxies.
+        A leftover duplicate would otherwise be read as the *next* command's
+        response, shifting the request/response stream by one — that is what made
+        get_state() periodically return the battery reply (0x0c, level byte) as
+        the lock state, so HA flipped to "unlocked", and made the following
+        battery read fail on a counter desync.
+
+        To stay aligned we (1) drain any stale frames before writing and
+        (2) keep reading until we get a frame whose opcode matches this command,
+        skipping undecryptable duplicates (their PTLS counter is already spent).
+        """
+        opcode = command[0]
+        logger.debug("Sending command: opcode=0x%02x, len=%d", opcode, len(command))
+
+        dropped = self.transport.drain_api_command_queue()
+        if dropped:
+            logger.debug(
+                "Dropped %d stale API frame(s) before command 0x%02x", dropped, opcode
+            )
+
         encrypted = self.session.encrypt(command)
         await self.transport.write_api_command(encrypted)
 
-        response = await self.transport.read_api_command(timeout=timeout)
-        logger.debug("Received response: len=%d, header=0x%02x", len(response), response[0])
-        decrypted = await self.session.async_decrypt(response)
-        logger.debug("Command response raw: %s", decrypted.hex())
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PTLSError(
+                    f"Timed out waiting for response to command 0x{opcode:02x}"
+                )
+            response = await self.transport.read_api_command(timeout=remaining)
+            logger.debug(
+                "Received response: len=%d, header=0x%02x", len(response), response[0]
+            )
+            try:
+                decrypted = await self.session.async_decrypt(response)
+            except PTLSError as err:
+                # Duplicate of an earlier frame: its counter is already consumed
+                # so it can't decrypt. Discard it and wait for the real response.
+                logger.warning("Skipping undecryptable API frame: %s", err)
+                continue
+            logger.debug("Command response raw: %s", decrypted.hex())
 
-        # Response format: [opcode] [result_code] [data...]
-        return decrypted[1:]
+            # Response format: [opcode] [result_code] [data...]
+            if decrypted and decrypted[0] != opcode:
+                logger.warning(
+                    "Skipping stale API response (opcode 0x%02x, expected 0x%02x)",
+                    decrypted[0], opcode,
+                )
+                continue
+            return decrypted[1:]
 
     async def set_signed_time(self, signed_time: dict) -> None:
         """Set signed datetime on the lock. Must be called first after session establishment."""

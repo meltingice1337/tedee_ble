@@ -177,6 +177,23 @@ class TedeeBLETransport:
             messages.append(msg)
         return messages
 
+    def drain_api_command_queue(self) -> int:
+        """Discard any pending API-command response frames, return how many.
+
+        The lock's API responses are sometimes delivered twice by BlueZ/proxies.
+        A leftover duplicate from a prior command would otherwise be read as the
+        next command's response (e.g. get_state() reading the battery reply), so
+        callers drain stale frames before issuing a new command.
+        """
+        dropped = 0
+        while not self._api_command_queue.empty():
+            try:
+                self._api_command_queue.get_nowait()
+                dropped += 1
+            except asyncio.QueueEmpty:
+                break
+        return dropped
+
     def drain_queues(self) -> None:
         """Clear all queues."""
         for q in (self._ptls_tx_queue, self._notification_queue, self._api_command_queue):
