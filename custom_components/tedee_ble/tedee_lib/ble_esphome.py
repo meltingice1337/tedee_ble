@@ -239,6 +239,21 @@ class ESPHomeBLETransport:
     async def read_api_command(self, timeout: float = 10.0) -> bytes:
         return await asyncio.wait_for(self._api_command_queue.get(), timeout=timeout)
 
+    def drain_api_command_queue(self) -> int:
+        """Discard any pending API-command response frames, return how many.
+
+        Mirrors TedeeBLETransport — _send_command drains stale/duplicate frames
+        before each command so a leftover isn't read as the next response.
+        """
+        dropped = 0
+        while not self._api_command_queue.empty():
+            try:
+                self._api_command_queue.get_nowait()
+                dropped += 1
+            except asyncio.QueueEmpty:
+                break
+        return dropped
+
     def drain_queues(self) -> None:
         for q in (self._ptls_tx_queue, self._notification_queue, self._api_command_queue):
             while not q.empty():
