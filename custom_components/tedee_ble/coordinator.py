@@ -43,6 +43,7 @@ from .const import (
     CONF_USER_MAP,
     DOMAIN,
     EVENT_LOCK_ACTION,
+    FIRMWARE_REBOOT_WINDOW_SECONDS,
     KEEPALIVE_INTERVAL_SECONDS,
     POLL_INTERVAL_SECONDS,
     PROXY_EXHAUSTED_DELAY_INDEX,
@@ -61,6 +62,7 @@ from .tedee_lib.lock_commands import (
     LOCK_STATE_UNLOCKED,
     LOCK_STATE_UNKNOWN,
     LOCK_STATE_UNLOCKING,
+    LOCK_STATE_UPDATING,
     STATUS_OK,
     UNLOCK_NO_PULL,
     UNLOCK_NONE,
@@ -127,6 +129,13 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         self._last_ble_activity: float = 0.0
         self._disconnect_time: float | None = None
 
+        # Firmware-update tracking. When the lock reports UPDATING it will soon
+        # reboot and change its BLE MAC; we use this to reconnect aggressively
+        # (fast retries + rediscover by serial) instead of backing off as if the
+        # proxy were out of connection slots.
+        self._firmware_updating: bool = False
+        self._firmware_update_since: float | None = None
+
         # State
         self.state = TedeeState()
 
@@ -187,6 +196,21 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
     def _resolve_ble_device(self, address: str) -> object:
         """Resolve BLEDevice from HA Bluetooth stack, fall back to address string."""
+        # During a firmware reboot the MAC changes, so the stored address is
+        # likely stale — connecting to it wastes a long timeout. Prefer whatever
+        # address is currently advertising this lock's serial.
+        if self._in_firmware_reboot_window():
+            rediscovered = self._rediscover_by_serial()
+            if rediscovered:
+                new_address = rediscovered.address.upper()
+                if new_address != address.upper():
+                    logger.warning(
+                        "MAC for %s changed during firmware update: %s -> %s",
+                        self.lock_name, address, new_address,
+                    )
+                    self._update_stored_address(new_address)
+                return rediscovered
+
         ble_device = async_ble_device_from_address(self.hass, address, connectable=True)
         if ble_device:
             logger.debug("Resolved BLEDevice: %s", ble_device.name)
@@ -256,6 +280,33 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         new_data = {**self.entry.data}
         new_data[CONF_ADDRESS] = new_address
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
+
+    def _track_firmware_state(self, lock_state: int) -> None:
+        """Note whether the lock is applying a firmware update.
+
+        A firmware update reboots the lock and changes its BLE MAC. Connect
+        failures during that window report the same "no connection slot / device
+        not reachable" error as real proxy exhaustion, so without this we'd back
+        off for 5 minutes. Tracking UPDATING lets the reconnect path stay fast.
+        """
+        if lock_state == LOCK_STATE_UPDATING:
+            if not self._firmware_updating:
+                logger.info("%s is applying a firmware update", self.lock_name)
+            self._firmware_updating = True
+            self._firmware_update_since = time.monotonic()
+        elif self._firmware_updating and lock_state != LOCK_STATE_UNKNOWN:
+            logger.info("%s firmware update complete", self.lock_name)
+            self._firmware_updating = False
+            self._firmware_update_since = None
+
+    def _in_firmware_reboot_window(self) -> bool:
+        """True if the lock is (or just was) updating, within the reboot window."""
+        if not self._firmware_updating or self._firmware_update_since is None:
+            return False
+        return (
+            time.monotonic() - self._firmware_update_since
+            < FIRMWARE_REBOOT_WINDOW_SECONDS
+        )
 
     async def _connect(self) -> None:
         """Full connection sequence: cert refresh → BLE → PTLS → init."""
@@ -386,6 +437,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 lock_state, status, door_state = await self._lock.get_state()
                 self.state.lock_state = lock_state
                 self.state.lock_status = status
+                self._track_firmware_state(lock_state)
                 if door_state != DOOR_STATE_UNKNOWN:
                     self.state.door_state = door_state
             except Exception:
@@ -502,10 +554,21 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 self.state.available = False
                 self.async_set_updated_data(self.state)
             if not self._shutting_down:
+                if self._in_firmware_reboot_window():
+                    # The lock is rebooting after a firmware update — its MAC
+                    # changes and connects fail with the same "no connection
+                    # slot / not reachable" error as proxy exhaustion. That's
+                    # transient, so keep retrying fast to latch onto the new MAC
+                    # as soon as it advertises, rather than backing off for 5min.
+                    logger.info(
+                        "Reconnect to %s failed during firmware update — retrying fast",
+                        self.lock_name,
+                    )
+                    self._reconnect_attempt = 0
                 # If the proxy is out of connection slots, retrying every 60s
                 # only keeps it busy and prevents recovery. Jump ahead in the
                 # backoff ladder so the proxy gets room to breathe.
-                if "no backend with an available connection slot" in str(err).lower():
+                elif "no backend with an available connection slot" in str(err).lower():
                     self._reconnect_attempt = max(
                         self._reconnect_attempt, PROXY_EXHAUSTED_DELAY_INDEX
                     )
@@ -542,6 +605,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                             self._last_ble_activity = time.monotonic()
                             self.state.lock_state = lock_state
                             self.state.lock_status = status
+                            self._track_firmware_state(lock_state)
                             if door_state != DOOR_STATE_UNKNOWN:
                                 self.state.door_state = door_state
                             self.async_set_updated_data(self.state)
@@ -571,6 +635,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     prev_lock_state = self.state.lock_state
                     self.state.lock_state = notification["state"]
                     self.state.lock_status = notification["status"]
+                    self._track_firmware_state(notification["state"])
                     if notification["door_state"] != DOOR_STATE_UNKNOWN:
                         self.state.door_state = notification["door_state"]
                     # Only fire lock action event if lock state actually changed
@@ -647,6 +712,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     lock_state, status, door_state = await self._lock.get_state()
                 self.state.lock_state = lock_state
                 self.state.lock_status = status
+                self._track_firmware_state(lock_state)
                 if door_state != DOOR_STATE_UNKNOWN:
                     self.state.door_state = door_state
             except Exception:
