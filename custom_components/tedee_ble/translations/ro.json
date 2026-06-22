@@ -33,6 +33,13 @@
             "register": {
                 "title": "Inregistrare",
                 "description": "Se genereaza cheile si se inregistreaza cu Tedee cloud..."
+            },
+            "reauth_confirm": {
+                "title": "Re-autentificare Tedee",
+                "description": "Cheia de acces personala pentru **{name}** nu mai functioneaza — este posibil sa fi fost revocata sau sa nu aiba permisiunile necesare. Introdu o cheie noua de pe [portalul Tedee]({tedee_portal_url}).",
+                "data": {
+                    "api_key": "Cheie de acces personala"
+                }
             }
         },
         "error": {
@@ -41,12 +48,15 @@
             "no_locks_found": "Nu s-au gasit incuietori in contul tau Tedee.",
             "invalid_mac": "Adresa MAC invalida. Foloseste formatul XX:XX:XX:XX:XX:XX.",
             "scan_failed": "Scanarea Bluetooth nu a gasit incuietoarea. Asigura-te ca este aproape si activa. Introdu adresa manual mai jos.",
+            "lock_not_on_account": "Cheia functioneaza, dar aceasta incuietoare nu este in contul ei. Foloseste o cheie din contul care detine incuietoarea.",
             "registration_failed": "Inregistrarea cu Tedee cloud a esuat."
         },
         "abort": {
             "all_locks_configured": "Toate incuietorile din acest cont sunt deja configurate.",
             "already_configured": "Aceasta incuietoare este deja configurata.",
             "not_supported": "Acest dispozitiv Tedee nu este o incuietoare suportata.",
+            "insufficient_scopes": "Cheia de acces personala nu are permisiunile necesare. In portalul Tedee, editeaza cheia si activeaza permisiunile complete pentru dispozitive si certificate, apoi adauga integrarea din nou.",
+            "reauth_successful": "Re-autentificarea a reusit.",
             "registration_failed": "Inregistrarea cu Tedee cloud a esuat. Verifica jurnalele pentru detalii."
         }
     },

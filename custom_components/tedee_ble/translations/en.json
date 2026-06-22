@@ -33,6 +33,13 @@
             "register": {
                 "title": "Registering",
                 "description": "Generating keys and registering with Tedee cloud..."
+            },
+            "reauth_confirm": {
+                "title": "Re-authenticate Tedee",
+                "description": "The Personal Access Key for **{name}** is no longer working — it may have been revoked or is missing required permissions. Enter a new key from [the Tedee portal]({tedee_portal_url}).",
+                "data": {
+                    "api_key": "Personal Access Key"
+                }
             }
         },
         "error": {
@@ -41,12 +48,15 @@
             "no_locks_found": "No locks found on your Tedee account.",
             "invalid_mac": "Invalid MAC address. Use format XX:XX:XX:XX:XX:XX.",
             "scan_failed": "Bluetooth scan did not find the lock. Make sure it is nearby and awake. Enter the address manually below.",
+            "lock_not_on_account": "That key works, but this lock is not on its account. Use a key from the account that owns the lock.",
             "registration_failed": "Registration with Tedee cloud failed."
         },
         "abort": {
             "all_locks_configured": "All locks on this account are already configured.",
             "already_configured": "This lock is already configured.",
             "not_supported": "This Tedee device is not a supported lock.",
+            "insufficient_scopes": "Your Personal Access Key is missing required permissions. In the Tedee portal, edit the key and enable full device and certificate permissions, then add the integration again.",
+            "reauth_successful": "Re-authentication was successful.",
             "registration_failed": "Registration with Tedee cloud failed. Check the logs for details."
         }
     },

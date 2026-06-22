@@ -87,6 +87,8 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
         self._discovered_serial: str = ""
         self._discovered_address: str = ""
         self._discovered_name: str = ""
+        # Set when HA starts a re-auth flow for an existing entry.
+        self._reauth_entry = None
 
     async def _async_fetch_locks(
         self, api_key: str
@@ -152,6 +154,45 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
             errors=errors,
             description_placeholders={
+                "tedee_portal_url": "https://portal.tedee.com/",
+            },
+        )
+
+    async def async_step_reauth(self, entry_data: dict) -> ConfigFlowResult:
+        """Handle re-auth, triggered when the stored API key stops working."""
+        self._reauth_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict | None = None
+    ) -> ConfigFlowResult:
+        """Collect a fresh Personal Access Key and update the existing entry."""
+        errors: dict[str, str] = {}
+        entry = self._reauth_entry
+
+        if user_input is not None and entry is not None:
+            api_key = user_input[CONF_API_KEY].strip()
+            locks, error = await self._async_fetch_locks(api_key)
+            if error:
+                errors["base"] = error
+            elif not any(
+                lock.get("id") == entry.data.get(CONF_DEVICE_ID) for lock in locks
+            ):
+                # Key is valid but this lock isn't on its account / not visible.
+                errors["base"] = "lock_not_on_account"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry, data={**entry.data, CONF_API_KEY: api_key}
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({vol.Required(CONF_API_KEY): str}),
+            errors=errors,
+            description_placeholders={
+                "name": entry.title if entry else "your Tedee lock",
                 "tedee_portal_url": "https://portal.tedee.com/",
             },
         )
@@ -330,8 +371,15 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
                 signed_time = await api.get_signed_time()
                 user_map = await api.get_user_map(device_id)
 
+            certificate = cert_data["certificate"]
+            cert_expiration = cert_data["expirationDate"]
+            device_public_key = cert_data["devicePublicKey"]
         except CloudAPIError as err:
             logger.error("Registration failed: %s", err)
+            # 401/403 here means the key authenticated but lacks the scopes
+            # needed to register a mobile / fetch the certificate (issue #7).
+            if err.status_code in (401, 403):
+                return self.async_abort(reason="insufficient_scopes")
             return self.async_abort(reason="registration_failed")
         except Exception:
             logger.exception("Unexpected error during registration")
@@ -351,9 +399,9 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_LOCK_MODEL: lock_model,
                 CONF_MOBILE_ID: mobile_id,
                 CONF_PRIVATE_KEY_PEM: private_key_pem,
-                CONF_CERTIFICATE: cert_data["certificate"],
-                CONF_CERT_EXPIRATION: cert_data["expirationDate"],
-                CONF_DEVICE_PUBLIC_KEY: cert_data["devicePublicKey"],
+                CONF_CERTIFICATE: certificate,
+                CONF_CERT_EXPIRATION: cert_expiration,
+                CONF_DEVICE_PUBLIC_KEY: device_public_key,
                 CONF_SIGNED_TIME: signed_time,
                 CONF_USER_MAP: {str(k): v for k, v in user_map.items()},
                 CONF_FIRMWARE_VERSION: firmware_version,

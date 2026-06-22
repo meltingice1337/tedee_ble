@@ -16,7 +16,11 @@ from bleak import BleakScanner
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryNotReady,
+    HomeAssistantError,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from homeassistant.components.bluetooth import (
@@ -51,7 +55,7 @@ from .const import (
     UNAVAILABLE_GRACE_SECONDS,
 )
 from .tedee_lib.ble import TedeeBLETransport, serial_to_service_uuid
-from .tedee_lib.cloud_api import TedeeCloudAPI, certificate_needs_refresh
+from .tedee_lib.cloud_api import CloudAPIError, TedeeCloudAPI, certificate_needs_refresh
 from .tedee_lib.crypto import pem_to_private_key
 from .tedee_lib.lock_commands import (
     DOOR_STATE_UNKNOWN,
@@ -689,6 +693,14 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             self._last_cert_check = now
             try:
                 await self._refresh_certificate_if_needed()
+            except CloudAPIError as err:
+                # Key revoked or missing scopes — prompt the user to re-auth
+                # instead of silently letting the certificate (and lock) expire.
+                if err.status_code in (401, 403):
+                    raise ConfigEntryAuthFailed(
+                        f"Tedee Cloud rejected the API key: {err}"
+                    ) from err
+                logger.warning("Certificate check failed: %s", err)
             except Exception:
                 logger.warning("Certificate check failed", exc_info=True)
 

@@ -68,6 +68,23 @@ class TedeeCloudAPI:
             raise CloudAPIError(resp.status_code, str(msg))
         return resp.json()
 
+    @staticmethod
+    def _require_result(data: dict, *keys: str) -> dict:
+        """Return data['result'], raising CloudAPIError if it (or any key) is missing.
+
+        Guards against a 200 response whose body shape drifted from what we
+        expect, so callers get a clean CloudAPIError instead of a KeyError.
+        """
+        result = data.get("result")
+        if not isinstance(result, dict):
+            raise CloudAPIError(502, f"Tedee Cloud returned no usable 'result': {data}")
+        missing = [k for k in keys if k not in result]
+        if missing:
+            raise CloudAPIError(
+                502, f"Tedee Cloud response missing fields {missing}: {result}"
+            )
+        return result
+
     async def get_devices(self) -> list[dict]:
         """Get all devices with details. Returns the locks list."""
         data = await self._request("GET", "/my/device/details")
@@ -94,7 +111,7 @@ class TedeeCloudAPI:
                 "publicKey": public_key_b64,
             },
         )
-        mobile_id = data["result"]["id"]
+        mobile_id = self._require_result(data, "id")["id"]
         logger.info("Registered mobile device: %s", mobile_id)
         return mobile_id
 
@@ -105,14 +122,16 @@ class TedeeCloudAPI:
             "/my/devicecertificate/getformobile",
             params={"mobileId": mobile_id, "deviceId": device_id},
         )
-        result = data["result"]
+        result = self._require_result(
+            data, "certificate", "expirationDate", "devicePublicKey"
+        )
         logger.info("Got certificate expiring %s", result.get("expirationDate"))
         return result
 
     async def get_signed_time(self) -> dict:
         """Get signed time for lock synchronization."""
         data = await self._request("GET", "/datetime/getsignedtime")
-        return data["result"]
+        return self._require_result(data)
 
     async def delete_mobile(self, mobile_id: str) -> None:
         """Delete a registered mobile device."""
