@@ -17,7 +17,7 @@ Control your Tedee smart lock over **Bluetooth Low Energy** directly from Home A
 
 **What you don't need:**
 - A **Tedee Bridge** - the integration talks directly to the lock over BLE
-- A **permanent cloud connection** - after initial setup, all lock commands happen locally. The cloud is only contacted every few days to refresh certificates
+- A **permanent cloud connection** - the lock only accepts commands from a device holding a certificate that Tedee signed for it, and your API key is what lets the integration obtain one during setup. After that, lock commands happen locally over BLE; the cloud is only contacted every few days to renew the certificate
 
 ---
 
