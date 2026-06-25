@@ -11,7 +11,7 @@ Control your Tedee smart lock over **Bluetooth Low Energy** directly from Home A
 
 **What you need:**
 - **Home Assistant 2024.1.0** or newer
-- A **Tedee GO 2** lock (aluminium or plastic) - other models (GO, PRO) may work but are untested
+- A **Tedee lock** — GO, GO 2, or PRO (all confirmed working)
 - A **Bluetooth adapter** on your Home Assistant host (built-in or USB dongle), **or** an **[ESPHome Bluetooth Proxy](https://esphome.github.io/bluetooth-proxies/)** (ESP32) within BLE range of the lock (~10m, varies by environment)
 - A free **Tedee Personal Access Key** from the [Tedee Portal](https://portal.tedee.com) (used during setup for certificate registration)
 
@@ -70,6 +70,8 @@ Control your Tedee smart lock over **Bluetooth Low Energy** directly from Home A
 4. Select your lock from the list
 5. The integration will scan for the lock over BLE - make sure your HA host has Bluetooth (or an ESPHome proxy) and is in range
 6. If the scan doesn't find it, you can enter the BLE MAC address manually
+
+> **Tip — auto-discovery:** If your HA host (or an ESPHome proxy) is already in BLE range, the lock is usually **auto-discovered**. A *"Tedee lock found"* card appears under **Settings → Devices & Services**; click **Configure**, enter your Personal Access Key, and setup finishes without the manual lock-picker or scan step.
 
 ### Getting your API key
 
@@ -137,7 +139,7 @@ type: custom:tedee-lock-card
 lock: lock.lock_lock
 door: binary_sensor.lock_door       # optional
 battery: sensor.lock_battery        # optional
-event: sensor.lock_last_event       # optional — entity opened when the activity row is clicked
+event: lock.lock_lock               # optional — entity whose dialog opens when the activity row is clicked (defaults to the lock)
 name: Front Door                    # optional, overrides entity name
 show_activity: true                 # optional, default true — set false to hide the activity row
 ```
@@ -156,7 +158,7 @@ show_activity: true                 # optional, default true — set false to hi
 ```mermaid
 flowchart LR
     HA["Home Assistant"]
-    Lock["Tedee Lock<br/>(GO 2)"]
+    Lock["Tedee Lock"]
     Cloud["Tedee Cloud API"]
 
     HA <-->|"BLE (encrypted)"| Lock
@@ -169,7 +171,7 @@ flowchart LR
 flowchart LR
     HA["Home Assistant"]
     Proxy["ESPHome BLE Proxy<br/>(ESP32)"]
-    Lock["Tedee Lock<br/>(GO 2)"]
+    Lock["Tedee Lock"]
     Cloud["Tedee Cloud API"]
 
     HA <-->|"Wi-Fi"| Proxy
@@ -182,7 +184,7 @@ flowchart LR
 3. **Encrypted Session** - A secure, encrypted BLE session is established using the certificate
 4. **Persistent Connection** - The integration maintains a persistent BLE connection with a 45-second keep-alive (the lock drops idle connections after ~25-45 s of inactivity), plus a 10-minute polling safety net
 5. **Real-time Notifications** - Lock state changes are pushed instantly via BLE notifications
-6. **Automatic Reconnection** - If the BLE connection drops, the integration reconnects automatically with backoff: 2 s, 5 s, 10 s, 30 s, then every 60 s thereafter (forever). A 15-second grace period prevents brief reconnections from showing entities as "unavailable"
+6. **Automatic Reconnection** - If the BLE connection drops, the integration reconnects automatically with escalating backoff (2 s → 5 s → 10 s → 30 s → 1 min → 2 min → 5 min → 10 min, then every 10 min, forever). A 15-second grace period prevents brief reconnections from showing entities as "unavailable". If an ESPHome proxy reports it's out of connection slots, the backoff jumps straight to 5 minutes so the proxy can recover instead of being hammered
 7. **MAC-Address Recovery** - If the lock's BLE MAC changes (e.g. after a firmware update), the integration first checks Home Assistant's discovery cache by service UUID; if that misses, it falls back to a live active BLE scan and silently updates the stored address. No HA restart or reconfigure is required
 
 ## Troubleshooting
@@ -203,7 +205,10 @@ flowchart LR
 - If you don't want to wait, click **Reload** on the Tedee BLE integration (Settings → Devices & Services → Tedee BLE → ⋯ → Reload). This re-runs setup, which rediscovers the lock by service UUID and updates the stored MAC
 
 ### Certificate errors
-- The integration auto-refreshes certificates. If you see persistent errors, remove and re-add the integration
+- The integration auto-refreshes certificates in the background. If you see persistent errors, remove and re-add the integration
+
+### API key revoked or missing permissions
+- If your Personal Access Key is later revoked or loses a required scope, Home Assistant raises a **re-authentication** prompt (a *"Reconfigure"* / repair notification on the Tedee BLE integration). Paste a fresh key from the [Tedee Portal](https://portal.tedee.com) — no need to remove and re-add the integration. The key must belong to the same account that owns the lock
 
 ### Reporting an issue
 
@@ -228,11 +233,13 @@ The repo includes a standalone `cli.py` for testing and debugging the BLE connec
 ```bash
 python cli.py scan                           # Find Tedee locks nearby
 python cli.py register                       # One-time: generate keys and register with Tedee cloud
+python cli.py connect                        # Test the connection and PTLS handshake
 python cli.py status                         # Get lock state and battery
-python cli.py lock                           # Lock the door
+python cli.py lock [--force]                 # Lock the door
 python cli.py unlock [--force] [--pull]      # Unlock (--pull to also pull spring)
 python cli.py pull                           # Pull spring only
 python cli.py info [--raw]                   # Show lock model, serial, firmware from cloud
+python cli.py access                         # Show who has access and recent activity (debug)
 python cli.py shell                          # Interactive session with persistent connection
 
 # Via ESPHome Bluetooth Proxy
