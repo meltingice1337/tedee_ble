@@ -682,8 +682,21 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                         logger.warning("Failed to sync time", exc_info=True)
 
         except asyncio.CancelledError:
-            pass
+            # Intentional teardown (_disconnect/shutdown cancels us) — propagate
+            # without scheduling a reconnect.
+            raise
+        except Exception as err:
+            logger.warning(
+                "Notification loop for %s crashed: %s — forcing reconnect",
+                self.lock_name, err, exc_info=True,
+            )
         logger.debug("Notification loop ended for %s", self.lock_name)
+        # Any abnormal exit (decrypt wedge, keep-alive/read break) can leave the
+        # session unusable while BLE still looks connected, so _on_disconnect
+        # never fires and the poll path skips reconnect. Force one here.
+        # _schedule_reconnect dedupes if a reconnect is already pending.
+        if not self._shutting_down:
+            self._schedule_reconnect()
 
     async def _async_update_data(self) -> TedeeState:
         """Polling fallback — also checks certificate freshness."""

@@ -68,6 +68,16 @@ class PTLSError(Exception):
     pass
 
 
+class PTLSDuplicateError(PTLSError):
+    """A byte-identical frame was re-delivered by the BLE notification dup-storm.
+
+    Its PTLS counter is already consumed, so it only decrypts against a counter
+    *behind* recv_counter. This is not a desync — callers should discard the
+    frame WITHOUT counting it toward any reconnect threshold.
+    """
+    pass
+
+
 class PTLSAlertError(PTLSError):
     def __init__(self, code: int):
         self.code = code
@@ -501,7 +511,27 @@ class PTLSSession:
             except InvalidTag:
                 continue
 
-        # 4) All attempts exhausted
+        # 4) Backward window: the lock's BLE stack re-delivers each notification
+        # up to ~5x. A duplicate of an already-consumed frame carries a counter
+        # *behind* recv_counter, so the forward searches above never match it.
+        # Recognise it as a duplicate and drop it WITHOUT advancing recv_counter,
+        # so a real event arriving right after a lock action can't wedge the
+        # receive channel. Skip counters still in _missed_counters — those were
+        # never consumed and are handled as legitimate late delivery in step 1.
+        for old_counter in range(self.recv_counter - 1, max(-1, self.recv_counter - 9), -1):
+            if old_counter in self._missed_counters:
+                continue
+            nonce = crypto.make_nonce(self.recv_iv, old_counter)
+            try:
+                crypto.aes_gcm_decrypt(self.recv_key, nonce, encrypted_data)
+            except InvalidTag:
+                continue
+            raise PTLSDuplicateError(
+                f"Duplicate frame re-delivered at counter {old_counter} "
+                f"(recv_counter={self.recv_counter})"
+            )
+
+        # 5) All attempts exhausted
         raise PTLSError(
             f"Decrypt failed: counter desync unrecoverable "
             f"(counter={self.recv_counter}, missed={self._missed_counters})"

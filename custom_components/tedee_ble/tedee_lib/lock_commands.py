@@ -11,7 +11,7 @@ import struct
 import time
 
 from .ble import TedeeBLETransport
-from .ptls import PTLSError, PTLSSession
+from .ptls import PTLSDuplicateError, PTLSError, PTLSSession
 
 logger = logging.getLogger(__name__)
 
@@ -336,6 +336,12 @@ class TedeeLock:
             try:
                 data = await self.session.async_decrypt(data)
                 self._consecutive_decrypt_failures = 0
+            except PTLSDuplicateError:
+                # Re-delivered frame from the BLE notification dup-storm — the
+                # original was already processed. Not a desync, so don't count
+                # it toward the reconnect threshold.
+                logger.debug("Ignoring duplicate notification frame")
+                return None
             except Exception as e:
                 self._consecutive_decrypt_failures += 1
                 if self._consecutive_decrypt_failures >= 3:
