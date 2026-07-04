@@ -14,5 +14,5 @@
     "iot_class": "local_push",
     "issue_tracker": "https://github.com/meltingice1337/tedee_ble/issues",
     "requirements": ["bleak>=0.21", "bleak-retry-connector>=3.0", "cryptography>=41.0", "httpx"],
-    "version": "0.1.14"
+    "version": "0.1.15"
 }
