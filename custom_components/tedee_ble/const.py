@@ -40,6 +40,10 @@ CERT_CHECK_INTERVAL_SECONDS = 6 * 3600  # 6 hours
 # after the last UPDATING sighting, treat connect failures as a reboot — retry
 # fast and rediscover by serial — instead of backing off as if proxy-exhausted.
 FIRMWARE_REBOOT_WINDOW_SECONDS = 300  # 5 minutes
+# How long to wait for the lock to advertise when its stored MAC has gone away.
+# Only spent when HA can't see the stored address at all, so it doesn't slow
+# down ordinary connect failures.
+ADVERTISEMENT_WAIT_SECONDS = 20
 
 # Event bus event type for logbook
 EVENT_LOCK_ACTION = f"{DOMAIN}_lock_action"

@@ -12,8 +12,6 @@ from datetime import timedelta
 import logging
 import time
 
-from bleak import BleakScanner
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import (
@@ -24,8 +22,12 @@ from homeassistant.exceptions import (
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from homeassistant.components.bluetooth import (
+    BluetoothCallbackMatcher,
+    BluetoothScanningMode,
+    async_address_present,
     async_ble_device_from_address,
     async_discovered_service_info,
+    async_process_advertisements,
 )
 from homeassistant.helpers import device_registry as dr
 
@@ -45,6 +47,7 @@ from .const import (
     CONF_SIGNED_TIME,
     CONF_UPDATE_AVAILABLE,
     CONF_USER_MAP,
+    ADVERTISEMENT_WAIT_SECONDS,
     DOMAIN,
     EVENT_LOCK_ACTION,
     FIRMWARE_REBOOT_WINDOW_SECONDS,
@@ -249,35 +252,74 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 return info.device
         return None
 
-    async def _active_scan_for_lock(self) -> object | None:
-        """Active BLE scan to find the lock by serial UUID (bypasses HA cache).
+    async def _wait_for_advertisement(self) -> object | None:
+        """Wait for the lock to advertise and return its current BLEDevice.
 
-        Used as fallback when cached discovery returns a stale MAC address,
-        e.g. after a firmware update changes the lock's BLE address.
+        Unlike the cache lookups above, this genuinely waits for a *fresh*
+        advertisement (and asks HA for an active scan while it waits). That is
+        what a firmware update needs: the lock reboots onto a new BLE MAC and
+        is absent from HA's discovery cache until it advertises again.
+
+        This replaces an earlier BleakScanner.discover() call, which could
+        never have worked here: habluetooth rebinds bleak.BleakScanner to
+        HaBleakScannerWrapper, whose discover() ignores its timeout and returns
+        the very same cache _rediscover_by_serial() has already searched.
         """
         serial = self.serial
         if not serial:
             return None
         try:
             target_uuid = serial_to_service_uuid(serial).lower()
-            logger.info(
-                "Active BLE scan for %s (UUID: %s)...",
-                self.lock_name, target_uuid,
+        except ValueError:
+            return None
+
+        logger.info(
+            "Waiting up to %ds for %s to advertise (UUID: %s)...",
+            ADVERTISEMENT_WAIT_SECONDS, self.lock_name, target_uuid,
+        )
+        try:
+            info = await async_process_advertisements(
+                self.hass,
+                lambda service_info: True,
+                BluetoothCallbackMatcher(
+                    service_uuid=target_uuid, connectable=True
+                ),
+                BluetoothScanningMode.ACTIVE,
+                ADVERTISEMENT_WAIT_SECONDS,
             )
-            devices = await BleakScanner.discover(timeout=10.0, return_adv=True)
-            for device, adv_data in devices.values():
-                service_uuids = [
-                    str(u).lower() for u in (adv_data.service_uuids or [])
-                ]
-                if target_uuid in service_uuids:
-                    logger.info(
-                        "Active scan found %s at %s",
-                        self.lock_name, device.address,
-                    )
-                    return device
-        except Exception:
-            logger.debug("Active BLE scan failed", exc_info=True)
-        return None
+        except asyncio.TimeoutError:
+            logger.debug(
+                "%s did not advertise within %ds",
+                self.lock_name, ADVERTISEMENT_WAIT_SECONDS,
+            )
+            return None
+        logger.info("%s advertised at %s", self.lock_name, info.address)
+        return info.device
+
+    async def _retry_at_new_address(self, source: str, device: object | None) -> bool:
+        """Connect at `device`'s address if it differs from the stored one.
+
+        Returns True when the lock turned up at a new MAC and the connect
+        succeeded, False when there was nothing new to try. A connect failure
+        at the new address propagates.
+        """
+        if device is None:
+            return False
+        old_address = self.entry.data[CONF_ADDRESS]
+        new_address = device.address.upper()
+        if new_address == old_address.upper():
+            return False
+        logger.warning(
+            "MAC address for %s changed: %s -> %s (via %s)",
+            self.lock_name, old_address, new_address, source,
+        )
+        self._update_stored_address(new_address)
+        self._transport = TedeeBLETransport(
+            device,
+            disconnect_callback=self._on_disconnect,
+        )
+        await self._transport.connect()
+        return True
 
     def _update_stored_address(self, new_address: str) -> None:
         """Persist a new MAC address to the config entry."""
@@ -335,35 +377,25 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             try:
                 await self._transport.connect()
             except Exception as connect_err:
-                rediscovered = self._rediscover_by_serial()
-                if rediscovered and rediscovered.address.upper() != data[CONF_ADDRESS]:
-                    new_addr = rediscovered.address.upper()
-                    logger.warning(
-                        "MAC address for %s changed: %s -> %s",
-                        self.lock_name, data[CONF_ADDRESS], new_addr,
+                # The stored MAC can be stale — most often because a firmware
+                # update rebooted the lock onto a new BLE address. Check HA's
+                # discovery cache first, since that costs nothing.
+                recovered = await self._retry_at_new_address(
+                    "discovery cache", self._rediscover_by_serial()
+                )
+                if not recovered and not async_address_present(
+                    self.hass, data[CONF_ADDRESS], connectable=True
+                ):
+                    # HA cannot see the lock at its stored address at all, so a
+                    # changed MAC is plausible and waiting for an advertisement
+                    # can pay off. When the address IS still present the MAC is
+                    # fine and the failure was something else (no free proxy
+                    # slot, timeout) — don't stall the retry ladder on it.
+                    recovered = await self._retry_at_new_address(
+                        "advertisement", await self._wait_for_advertisement()
                     )
-                    self._update_stored_address(new_addr)
-                    self._transport = TedeeBLETransport(
-                        rediscovered,
-                        disconnect_callback=self._on_disconnect,
-                    )
-                    await self._transport.connect()
-                else:
-                    scanned = await self._active_scan_for_lock()
-                    if scanned and scanned.address.upper() != data[CONF_ADDRESS]:
-                        new_addr = scanned.address.upper()
-                        logger.warning(
-                            "MAC address for %s changed: %s -> %s (active scan)",
-                            self.lock_name, data[CONF_ADDRESS], new_addr,
-                        )
-                        self._update_stored_address(new_addr)
-                        self._transport = TedeeBLETransport(
-                            scanned,
-                            disconnect_callback=self._on_disconnect,
-                        )
-                        await self._transport.connect()
-                    else:
-                        raise connect_err
+                if not recovered:
+                    raise connect_err
 
             # Create PTLS session and handshake
             private_key = pem_to_private_key(data[CONF_PRIVATE_KEY_PEM].encode())
@@ -516,7 +548,6 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         a grace period before showing entities as unavailable.
         """
         logger.warning("BLE disconnected from %s", self.lock_name)
-        self._disconnect_time = time.monotonic()
 
         if not self._shutting_down:
             self._schedule_reconnect()
@@ -526,6 +557,19 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         """Schedule a reconnection attempt with backoff."""
         if self._reconnect_task and not self._reconnect_task.done():
             return  # Already scheduled
+
+        # Start the unavailability grace clock here rather than in
+        # _on_disconnect, because that callback is not the only way we notice a
+        # dead connection: an abnormal notification-loop exit (decrypt wedge,
+        # keep-alive failure) reconnects while BLE still looks connected, so no
+        # disconnect callback ever fires. With no timestamp on that path the
+        # grace check in _reconnect() can never pass, and entities stay
+        # "available" showing a stale lock state for as long as it keeps
+        # failing. Stamp only the first attempt — re-stamping on every retry
+        # would push the deadline out forever and defeat the check just as
+        # thoroughly.
+        if self._disconnect_time is None:
+            self._disconnect_time = time.monotonic()
 
         delay_idx = min(self._reconnect_attempt, len(RECONNECT_DELAYS) - 1)
         delay = RECONNECT_DELAYS[delay_idx]
