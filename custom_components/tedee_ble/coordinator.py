@@ -40,6 +40,8 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_DEVICE_PUBLIC_KEY,
     CONF_FIRMWARE_VERSION,
+    CONF_HAS_DOOR_SENSOR,
+    CONF_LOCK_MODEL,
     CONF_LOCK_NAME,
     CONF_MOBILE_ID,
     CONF_PRIVATE_KEY_PEM,
@@ -49,6 +51,7 @@ from .const import (
     CONF_USER_MAP,
     ADVERTISEMENT_WAIT_SECONDS,
     DOMAIN,
+    resolve_lock_model,
     EVENT_LOCK_ACTION,
     FIRMWARE_REBOOT_WINDOW_SECONDS,
     KEEPALIVE_INTERVAL_SECONDS,
@@ -64,6 +67,7 @@ from .tedee_lib.lock_commands import (
     DOOR_STATE_UNKNOWN,
     LOCK_STATE_LOCKED,
     LOCK_STATE_LOCKING,
+    LOCK_STATE_NAMES,
     LOCK_STATE_PULL_SPRING,
     LOCK_STATE_PULLING,
     LOCK_STATE_UNLOCKED,
@@ -71,6 +75,7 @@ from .tedee_lib.lock_commands import (
     LOCK_STATE_UNLOCKING,
     LOCK_STATE_UPDATING,
     STATUS_OK,
+    TRANSITIONAL_LOCK_STATES,
     UNLOCK_NO_PULL,
     UNLOCK_NONE,
     TedeeLock,
@@ -94,6 +99,11 @@ class TedeeState:
     door_state: int = DOOR_STATE_UNKNOWN
     battery_level: int | None = None
     battery_charging: bool = False
+    # Paired-accessory battery (door sensor). Push-only — there is no GET
+    # command for it — so this stays None until the lock volunteers a 0xD5.
+    accessory_battery_level: int | None = None
+    accessory_battery_id: int | None = None
+    accessory_battery_timestamp: int | None = None
     available: bool = False
     last_trigger: str = "unknown"  # What caused the last state change
     last_user: str = "N/A"  # Who triggered the last action
@@ -170,8 +180,48 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             and self._session.is_established
         )
 
+    def _note_door_sensor_present(self) -> None:
+        """Record that a door sensor is paired, so its entities can be created.
+
+        GET_DOOR_STATE fails outright on a lock with no sensor paired, so a
+        successful read is a reliable positive. Never cleared again: a single
+        transient read failure shouldn't make established entities vanish.
+        """
+        if self.entry.data.get(CONF_HAS_DOOR_SENSOR):
+            return
+        logger.info("Door sensor detected on %s", self.lock_name)
+        self.hass.config_entries.async_update_entry(
+            self.entry, data={**self.entry.data, CONF_HAS_DOOR_SENSOR: True}
+        )
+
+    def _migrate_lock_model(self) -> None:
+        """Refresh the stored model name from the serial.
+
+        Entries created before GO 2 detection existed were saved as plain "GO".
+        The serial is authoritative, so recompute and correct in place.
+        """
+        serial = self.serial
+        if not serial:
+            return
+        resolved = resolve_lock_model(None, serial)
+        if resolved == "Lock" or resolved == self.entry.data.get(CONF_LOCK_MODEL):
+            return
+        logger.info(
+            "Correcting model for %s: %s -> %s",
+            self.lock_name, self.entry.data.get(CONF_LOCK_MODEL), resolved,
+        )
+        self.hass.config_entries.async_update_entry(
+            self.entry, data={**self.entry.data, CONF_LOCK_MODEL: resolved}
+        )
+        dev_reg = dr.async_get(self.hass)
+        device = dev_reg.async_get_device(identifiers={(DOMAIN, str(self.device_id))})
+        if device:
+            dev_reg.async_update_device(device.id, model=resolved)
+
     async def async_setup(self) -> None:
         """Set up the coordinator — connect to the lock."""
+        self._migrate_lock_model()
+
         if not self.entry.data.get(CONF_FIRMWARE_VERSION):
             try:
                 await self._refresh_firmware_info()
@@ -345,6 +395,55 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             self._firmware_updating = False
             self._firmware_update_since = None
 
+    def _apply_observed_state(
+        self, lock_state: int, status: int, door_state: int
+    ) -> None:
+        """Apply a state read from get_state (connect, keep-alive or poll).
+
+        These reads carry no trigger or user, so those are left as they are —
+        whatever started a transition is still what finished it.
+
+        `last_event_type` must advance though. The lock announces LOCKING and
+        then LOCKED ~5s later; if the connection drops in between, that second
+        notification never arrives and the next state read is the only thing
+        that knows the move completed. Without this the entity reads `locked`
+        while `last_action` stays frozen at "locking".
+        """
+        prev_lock_state = self.state.lock_state
+
+        self.state.lock_state = lock_state
+        self.state.lock_status = status
+        self._track_firmware_state(lock_state)
+        if door_state != DOOR_STATE_UNKNOWN:
+            self.state.door_state = door_state
+
+        # Only stand in for a *missed terminal* notification: settling out of a
+        # transitional state. Anything else (including the first read after
+        # setup, from LOCK_STATE_UNKNOWN) is not an event we failed to see.
+        if (
+            lock_state != prev_lock_state
+            and prev_lock_state in TRANSITIONAL_LOCK_STATES
+            and lock_state not in TRANSITIONAL_LOCK_STATES
+        ):
+            self.state.last_event_type = LOCK_STATE_NAMES.get(
+                lock_state, f"0x{lock_state:02x}"
+            ).lower()
+            self.state.last_event_id += 1
+            logger.info(
+                "Missed the %s notification for %s (was %s) — recovered from a "
+                "state read",
+                self.state.last_event_type,
+                self.lock_name,
+                LOCK_STATE_NAMES.get(prev_lock_state, f"0x{prev_lock_state:02x}"),
+            )
+            self.hass.bus.async_fire(EVENT_LOCK_ACTION, {
+                "entity_id": self.lock_entity_id,
+                "lock_name": self.lock_name,
+                "action": self.state.last_event_type,
+                "trigger": self.state.last_trigger,
+                "user": self.state.last_user,
+            })
+
     def _in_firmware_reboot_window(self) -> bool:
         """True if the lock is (or just was) updating, within the reboot window."""
         if not self._firmware_updating or self._firmware_update_since is None:
@@ -471,11 +570,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
             try:
                 lock_state, status, door_state = await self._lock.get_state()
-                self.state.lock_state = lock_state
-                self.state.lock_status = status
-                self._track_firmware_state(lock_state)
-                if door_state != DOOR_STATE_UNKNOWN:
-                    self.state.door_state = door_state
+                self._apply_observed_state(lock_state, status, door_state)
             except Exception:
                 logger.warning("Failed to get initial lock state", exc_info=True)
 
@@ -493,6 +588,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 door_state = await self._lock.get_door_state()
                 if door_state != DOOR_STATE_UNKNOWN:
                     self.state.door_state = door_state
+                self._note_door_sensor_present()
             except Exception:
                 logger.debug("Failed to get initial door state (no door sensor?)", exc_info=True)
 
@@ -651,11 +747,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                                     await self._lock.get_state()
                                 )
                             self._last_ble_activity = time.monotonic()
-                            self.state.lock_state = lock_state
-                            self.state.lock_status = status
-                            self._track_firmware_state(lock_state)
-                            if door_state != DOOR_STATE_UNKNOWN:
-                                self.state.door_state = door_state
+                            self._apply_observed_state(lock_state, status, door_state)
                             self.async_set_updated_data(self.state)
                         except Exception as err:
                             logger.warning("Keep-alive failed: %s", err)
@@ -712,6 +804,17 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                         })
                     self.async_set_updated_data(self.state)
 
+
+                elif notification["type"] == "battery":
+                    self.state.battery_level = notification["level"]
+                    self.state.battery_charging = notification["charging"]
+                    self.async_set_updated_data(self.state)
+
+                elif notification["type"] == "accessory_battery":
+                    self.state.accessory_battery_level = notification["level"]
+                    self.state.accessory_battery_id = notification["accessory_id"]
+                    self.state.accessory_battery_timestamp = notification["timestamp"]
+                    self.async_set_updated_data(self.state)
 
                 elif notification["type"] == "need_datetime":
                     logger.info("Lock %s requests time sync", self.lock_name)
@@ -779,11 +882,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             try:
                 async with self._command_lock:
                     lock_state, status, door_state = await self._lock.get_state()
-                self.state.lock_state = lock_state
-                self.state.lock_status = status
-                self._track_firmware_state(lock_state)
-                if door_state != DOOR_STATE_UNKNOWN:
-                    self.state.door_state = door_state
+                self._apply_observed_state(lock_state, status, door_state)
             except Exception:
                 logger.warning("Failed to poll lock state", exc_info=True)
 

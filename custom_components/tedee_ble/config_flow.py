@@ -28,8 +28,8 @@ from .const import (
     CONF_SIGNED_TIME,
     CONF_UPDATE_AVAILABLE,
     CONF_USER_MAP,
-    DEVICE_TYPE_MODELS,
     DOMAIN,
+    resolve_lock_model,
 )
 from .tedee_lib.ble import serial_to_service_uuid, service_uuid_to_serial
 from .tedee_lib.cloud_api import CloudAPIError, TedeeCloudAPI
@@ -354,7 +354,7 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
         device_id = lock["id"]
         serial = lock.get("serialNumber", "")
         lock_name = lock.get("name", "Lock")
-        lock_model = DEVICE_TYPE_MODELS.get(lock.get("type"), "Lock")
+        lock_model = resolve_lock_model(lock.get("type"), serial)
         sw_info = (lock.get("softwareVersions") or [{}])[0]
         firmware_version = sw_info.get("version", "")
         update_available = sw_info.get("updateAvailable", False)

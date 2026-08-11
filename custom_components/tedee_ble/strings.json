@@ -90,6 +90,9 @@
         "sensor": {
             "battery": {
                 "name": "Battery"
+            },
+            "door_sensor_battery": {
+                "name": "Door sensor battery"
             }
         }
     }

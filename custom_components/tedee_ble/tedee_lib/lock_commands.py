@@ -80,6 +80,16 @@ LOCK_STATE_NAMES = {
     0x12: "UPDATING",
 }
 
+# States the lock passes through mid-move. It sends a terminal state
+# notification once it settles; if that one is missed the state read that
+# follows has to stand in for it.
+TRANSITIONAL_LOCK_STATES = frozenset({
+    LOCK_STATE_UNLOCKING,
+    LOCK_STATE_LOCKING,
+    LOCK_STATE_PULL_SPRING,
+    LOCK_STATE_PULLING,
+})
+
 # State change status
 STATUS_OK = 0x00
 STATUS_JAMMED = 0x01
@@ -117,7 +127,13 @@ TRIGGER_NAMES = {
 # Notification IDs
 NOTIFY_LOCK_STATUS_CHANGE = 0xBA
 NOTIFY_SIGNED_DATETIME = 0x7B
+NOTIFY_BATTERY = 0xA0
 NOTIFY_NEED_DATE_TIME = 0xA4
+NOTIFY_HAS_LOGS = 0xA5
+NOTIFY_BATTERY_START_CHARGING = 0xBC
+NOTIFY_BATTERY_STOP_CHARGING = 0xBD
+NOTIFY_BATTERY_FULLY_CHARGED = 0xBE
+NOTIFY_ACCESSORY_BATTERY = 0xD5
 NOTIFY_DEVICE_STATS = 0xE2
 
 
@@ -396,6 +412,64 @@ class TedeeLock:
         if notify_id == NOTIFY_SIGNED_DATETIME:
             result = data[1] if len(data) > 1 else 0xFF
             return {"type": "signed_datetime_ack", "result": result}
+
+        # Unprompted battery pushes; same payload as the GET_BATTERY response.
+        if notify_id == NOTIFY_BATTERY:
+            if len(data) < 2:
+                return None
+            return {
+                "type": "battery",
+                "level": data[1],
+                "charging": len(data) > 2 and data[2] == 1,
+            }
+
+        if notify_id in (
+            NOTIFY_BATTERY_START_CHARGING,
+            NOTIFY_BATTERY_STOP_CHARGING,
+        ):
+            if len(data) < 2:
+                return None
+            return {
+                "type": "battery",
+                "level": data[1],
+                "charging": notify_id == NOTIFY_BATTERY_START_CHARGING,
+            }
+
+        if notify_id == NOTIFY_BATTERY_FULLY_CHARGED:
+            # Carries no meaningful level byte; fully charged means 100%.
+            return {"type": "battery", "level": 100, "charging": False}
+
+        if notify_id == NOTIFY_ACCESSORY_BATTERY:
+            # Paired-accessory battery (door sensor). Push-only — no GET exists.
+            #   [0] level u8 (255=invalid) [1..4] ts i32 BE epoch seconds
+            #   [5..8] accessory_id i32 BE
+            if len(data) < 10:
+                logger.debug("Short accessory battery notification: %s", data.hex())
+                return None
+            level = data[1]
+            if not 0 <= level <= 100:
+                logger.debug("Ignoring invalid accessory battery level %d", level)
+                return None
+            # Stale readings are kept and the timestamp exposed instead, so a
+            # drifting lock clock can't silence the sensor entirely.
+            result = {
+                "type": "accessory_battery",
+                "level": level,
+                "timestamp": int.from_bytes(data[2:6], "big"),
+                "accessory_id": int.from_bytes(data[6:10], "big"),
+            }
+            logger.info(
+                "Accessory battery: id=%d level=%d%% ts=%d",
+                result["accessory_id"], level, result["timestamp"],
+            )
+            return result
+
+        if notify_id == NOTIFY_HAS_LOGS:
+            # Unread activity logs; repeats ~15s until read via 0x2D on char
+            # 0x0601. Deliberately not drained: the read clears the buffer, and
+            # those entries are what populates the vendor's cloud activity
+            # history. Named just to keep it out of "unknown".
+            return {"type": "has_logs"}
 
         if notify_id == NOTIFY_DEVICE_STATS:
             return {"type": "device_stats", "data": data[1:].hex()}

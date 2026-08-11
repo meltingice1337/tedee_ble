@@ -101,11 +101,29 @@ The integration creates the following entities per lock, all grouped under a sin
 | **Lock** | `lock` | Lock, unlock, and open (pull spring). Surfaces `locking`, `unlocking`, `partially_unlocked`, and `jammed` states. Exposes `last_action`, `last_trigger`, `last_user`, and `is_updating` as attributes. |
 | **Door** | `binary_sensor` | Door open/closed state. Requires the optional **Tedee door sensor** accessory to be installed on the lock. |
 | **Battery** | `sensor` | Battery percentage. Exposes a `charging` attribute (diagnostic). |
+| **Door sensor battery** | `sensor` | Battery percentage of the **door sensor accessory**. Only created when a door sensor is paired. See the note below on when it populates. Diagnostic. |
 | **Firmware update** | `binary_sensor` | On while a firmware update is available **or** being applied. Exposes a `status` attribute (`available` / `updating` / `idle`). Diagnostic. |
 
 Each lock-state change also fires a `tedee_ble_lock_action` event on the bus (with `action`, `trigger`, `user`, `entity_id`, `lock_name`) — useful for automations and the logbook.
 
 The **firmware version** is shown on the device info page (Settings > Devices > your lock), not as a separate entity.
+
+### Door sensor battery
+
+This one behaves differently from every other entity, so it's worth knowing what to expect.
+
+The lock has **no command to report its accessories' battery** — the level arrives only as an unprompted notification, on the lock's own schedule. In testing that was roughly **once a day**. There is no way to make it report sooner.
+
+What this means in practice:
+
+- The entity is **only created if a door sensor is paired**. The integration detects this at startup, so on a lock without the accessory it never appears at all. If you pair one later, reload the integration (or restart Home Assistant) for it to show up.
+- It will read **unavailable until the very first report arrives**, which can take up to a day after setup. That is expected, not a fault.
+- After that, the value is **restored across restarts**, so it should never go unavailable again.
+- Because reports are infrequent, the value can legitimately be hours old. Two attributes let you tell:
+  - **`last_reported`** — timestamp of the reading, as reported by the lock.
+  - **`restored`** — `true` when the value came from the previous Home Assistant run rather than a live report.
+
+Use it for a low-battery alert, not as a live gauge.
 
 ### Activity tracking
 

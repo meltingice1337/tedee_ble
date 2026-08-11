@@ -82,11 +82,17 @@
         "binary_sensor": {
             "door": {
                 "name": "Door"
+            },
+            "firmware_update": {
+                "name": "Firmware update"
             }
         },
         "sensor": {
             "battery": {
                 "name": "Battery"
+            },
+            "door_sensor_battery": {
+                "name": "Door sensor battery"
             }
         }
     }

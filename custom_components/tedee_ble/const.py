@@ -19,13 +19,42 @@ CONF_USER_MAP = "user_map"  # {userId: username} from activity logs
 CONF_AUTO_PULL = "auto_pull"  # Unlock also pulls spring
 CONF_FIRMWARE_VERSION = "firmware_version"
 CONF_UPDATE_AVAILABLE = "update_available"
+CONF_HAS_DOOR_SENSOR = "has_door_sensor"  # a door sensor accessory is paired
 
 # Tedee API device type → model name
 DEVICE_TYPE_MODELS = {
+    0: "PRO",
     2: "PRO",
     4: "GO",
-    # 1=Bridge, 3=Keypad, 5=Gate, 6=DryContact, 8=Door Sensor, 10=Keypad PRO
+    12: "Z-Wave Lock",
+    13: "PRO 2",
+    # 1=Bridge, 3=Keypad, 5=Gate, 6=DryContact, 8=Door Sensor,
+    # 9=Fingerprint, 10=Keypad PRO
 }
+
+
+def resolve_lock_model(device_type: int | None, serial: str) -> str:
+    """Resolve the display model name for a lock.
+
+    GO and GO 2 both report device type 4, so the cloud `type` field alone
+    cannot tell them apart. The distinction is encoded in the serial number:
+    characters 6-7 are >= 20 on a GO 2.
+
+    When device_type is None the family is derived from the serial as well,
+    from characters 4-5.
+    """
+    digits = serial.replace("-", "")
+    if device_type is None and len(digits) >= 6 and digits[4:6].isdigit():
+        device_type = int(digits[4:6])
+    model = DEVICE_TYPE_MODELS.get(device_type, "Lock")
+    if (
+        model == "GO"
+        and len(digits) >= 8
+        and digits[6:8].isdigit()
+        and int(digits[6:8]) >= 20
+    ):
+        return "GO 2"
+    return model
 
 # Coordinator
 RECONNECT_DELAYS = [2, 5, 10, 30, 60, 120, 300, 600]
