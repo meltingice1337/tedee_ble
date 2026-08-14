@@ -121,7 +121,7 @@ What this means in practice:
 - After that, the value is **restored across restarts**, so it should never go unavailable again.
 - Because reports are infrequent, the value can legitimately be hours old. Two attributes let you tell:
   - **`last_reported`** — timestamp of the reading, as reported by the lock.
-  - **`restored`** — `true` when the value came from the previous Home Assistant run rather than a live report.
+  - **`stale`** — `true` when the value came from the previous Home Assistant run rather than a live report.
 
 Use it for a low-battery alert, not as a live gauge.
 

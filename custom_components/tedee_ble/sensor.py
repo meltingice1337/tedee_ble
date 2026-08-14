@@ -145,7 +145,12 @@ class TedeeDoorSensorBatterySensor(CoordinatorEntity[TedeeCoordinator], RestoreS
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose provenance so a stale reading is recognisable as stale."""
+        """Expose provenance so a stale reading is recognisable as stale.
+
+        Note the key is `stale`, not `restored`: `restored` is reserved by HA
+        (`ATTR_RESTORED`) to mark a registry entry whose integration is gone,
+        and setting it makes the UI report this entity as no longer provided.
+        """
         state = self.coordinator.state
         return {
             "accessory_id": state.accessory_battery_id,
@@ -156,5 +161,5 @@ class TedeeDoorSensorBatterySensor(CoordinatorEntity[TedeeCoordinator], RestoreS
                 if state.accessory_battery_timestamp
                 else None
             ),
-            "restored": state.accessory_battery_level is None,
+            "stale": state.accessory_battery_level is None,
         }
