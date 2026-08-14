@@ -54,6 +54,7 @@ from .const import (
     resolve_lock_model,
     EVENT_LOCK_ACTION,
     FIRMWARE_REBOOT_WINDOW_SECONDS,
+    FIRMWARE_REFRESH_DELAYS,
     KEEPALIVE_INTERVAL_SECONDS,
     POLL_INTERVAL_SECONDS,
     PROXY_EXHAUSTED_DELAY_INDEX,
@@ -394,6 +395,11 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             logger.info("%s firmware update complete", self.lock_name)
             self._firmware_updating = False
             self._firmware_update_since = None
+            self.hass.async_create_task(
+                self._refresh_firmware_after_update(
+                    self.entry.data.get(CONF_FIRMWARE_VERSION, "")
+                )
+            )
 
     def _apply_observed_state(
         self, lock_state: int, status: int, door_state: int
@@ -443,6 +449,16 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 "trigger": self.state.last_trigger,
                 "user": self.state.last_user,
             })
+        elif lock_state != prev_lock_state and prev_lock_state == LOCK_STATE_UPDATING:
+            # Back from a firmware update: the reboot ate the announcement, so
+            # advance last_action. No event fired — nobody acted, and a phantom
+            # "locked" would land in the logbook. Trigger/user from the UPDATING
+            # notification don't describe this, so they reset.
+            self.state.last_event_type = LOCK_STATE_NAMES.get(
+                lock_state, f"0x{lock_state:02x}"
+            ).lower()
+            self.state.last_trigger = "unknown"
+            self.state.last_user = "N/A"
 
     def _in_firmware_reboot_window(self) -> bool:
         """True if the lock is (or just was) updating, within the reboot window."""
@@ -1004,6 +1020,26 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         # Update device registry so sw_version shows immediately
         self._update_device_sw_version(fw_info["version"])
         logger.info("Firmware: %s (update: %s)", fw_info["version"], fw_info["updateAvailable"])
+
+    async def _refresh_firmware_after_update(self, previous_version: str) -> None:
+        """Re-read the firmware version from the cloud once an update finishes."""
+        for delay in FIRMWARE_REFRESH_DELAYS:
+            await asyncio.sleep(delay)
+            if self._shutting_down:
+                return
+            try:
+                await self._refresh_firmware_info()
+            except Exception:
+                logger.debug("Firmware info refresh failed", exc_info=True)
+                continue
+            if self.entry.data.get(CONF_FIRMWARE_VERSION) != previous_version:
+                return
+        logger.warning(
+            "%s still reports firmware %s after an update — cloud may not have "
+            "seen it check in yet",
+            self.lock_name,
+            previous_version,
+        )
 
     def _update_device_sw_version(self, version: str) -> None:
         """Update sw_version in the device registry."""

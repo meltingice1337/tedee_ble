@@ -73,6 +73,9 @@ FIRMWARE_REBOOT_WINDOW_SECONDS = 300  # 5 minutes
 # Only spent when HA can't see the stored address at all, so it doesn't slow
 # down ordinary connect failures.
 ADVERTISEMENT_WAIT_SECONDS = 20
+# sw_version comes from the cloud, which only learns the new version once the
+# lock checks in — that lags the reboot. Re-poll on this schedule until it moves.
+FIRMWARE_REFRESH_DELAYS = [30, 60, 120, 300, 600]
 
 # Event bus event type for logbook
 EVENT_LOCK_ACTION = f"{DOMAIN}_lock_action"
