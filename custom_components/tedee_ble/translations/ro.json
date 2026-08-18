@@ -83,6 +83,9 @@
             "door": {
                 "name": "Usa"
             },
+            "battery_charging": {
+                "name": "Incarcare baterie"
+            },
             "firmware_update": {
                 "name": "Actualizare firmware"
             }

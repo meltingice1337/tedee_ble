@@ -83,6 +83,9 @@
             "door": {
                 "name": "Door"
             },
+            "battery_charging": {
+                "name": "Battery charging"
+            },
             "firmware_update": {
                 "name": "Firmware update"
             }
