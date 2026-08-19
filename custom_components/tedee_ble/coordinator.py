@@ -12,7 +12,7 @@ from datetime import timedelta
 import logging
 import time
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
@@ -29,7 +29,7 @@ from homeassistant.components.bluetooth import (
     async_discovered_service_info,
     async_process_advertisements,
 )
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import (
     CERT_CHECK_INTERVAL_SECONDS,
@@ -65,6 +65,7 @@ from .tedee_lib.ble import TedeeBLETransport, serial_to_service_uuid
 from .tedee_lib.cloud_api import CloudAPIError, TedeeCloudAPI, certificate_needs_refresh
 from .tedee_lib.crypto import pem_to_private_key
 from .tedee_lib.lock_commands import (
+    CommandError,
     DOOR_STATE_UNKNOWN,
     LOCK_STATE_LOCKED,
     LOCK_STATE_LOCKING,
@@ -89,6 +90,25 @@ from .tedee_lib.ptls import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@callback
+def async_remove_stale_entity(
+    hass: HomeAssistant, platform: str, unique_id: str
+) -> None:
+    """Drop an entity this configuration should not have.
+
+    Simply not adding it is not enough: the registry entry survives, and HA
+    then shows it as "no longer being provided" — still unavailable, still
+    cluttering the device page and the battery dashboard. The quality-scale
+    `dynamic-devices` rule prescribes removal, so remove it.
+    """
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id(platform, DOMAIN, unique_id)
+    if entity_id is None:
+        return
+    logger.debug("Removing stale entity %s", entity_id)
+    registry.async_remove(entity_id)
 
 
 @dataclass
@@ -140,6 +160,10 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         self._reconnect_attempt: int = 0
         self._shutting_down: bool = False
 
+        # Door-sensor detection reloads the entry once at most, so a probe and a
+        # push that disagree cannot start a reload loop. See _set_has_door_sensor.
+        self._reloaded_for_door_sensor: bool = False
+
         # Certificate check timing
         self._last_cert_check: float = 0
 
@@ -181,19 +205,74 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             and self._session.is_established
         )
 
-    def _note_door_sensor_present(self) -> None:
-        """Record that a door sensor is paired, so its entities can be created.
+    def _observe_door_state(self, door_state: int) -> None:
+        """Apply a door reading and record what it proves about a paired sensor.
 
-        GET_DOOR_STATE fails outright on a lock with no sensor paired, so a
-        successful read is a reliable positive. Never cleared again: a single
-        transient read failure shouldn't make established entities vanish.
+        An OPEN or CLOSED reading is the only sound evidence available over BLE
+        that a door sensor is paired. Notably the 0xD5 accessory-battery push is
+        *not* — it carries an accessory id but no type, and the same opcode
+        serves keypads, gates and dry contacts.
         """
-        if self.entry.data.get(CONF_HAS_DOOR_SENSOR):
+        if door_state == DOOR_STATE_UNKNOWN:
             return
-        logger.info("Door sensor detected on %s", self.lock_name)
-        self.hass.config_entries.async_update_entry(
-            self.entry, data={**self.entry.data, CONF_HAS_DOOR_SENSOR: True}
+        self.state.door_state = door_state
+        self._set_has_door_sensor(True)
+
+    def _note_door_sensor_absent(self) -> None:
+        """Record that the lock says it has no door data.
+
+        Only call this when the lock actually answered — either SUCCESS with
+        UNKNOWN, or a CommandError, which is the firmware rejecting the command
+        rather than a transport problem. A lock with a paired sensor answers
+        OPEN or CLOSED, so both of those mean no sensor. Timeouts and dropped
+        connections raise other exception types and must never land here; that
+        is the transient failure the old never-clear rule was guarding against.
+        """
+        if self.entry.state is ConfigEntryState.LOADED:
+            # A mid-session reconnect. The entities are live and possibly in
+            # use, and a probe that contradicts what this session already saw
+            # is likelier a blip than an unpairing — let the next reload settle
+            # it. During the setup connect (including a reload, which is how
+            # someone who just unpaired a sensor will trigger this) the probe
+            # is the authority: everything read before it in the connect
+            # sequence is a cached door value that may predate the unpairing.
+            return
+        self._set_has_door_sensor(False)
+
+    def _set_has_door_sensor(self, present: bool) -> None:
+        """Persist whether a door sensor is paired, reloading if it changed.
+
+        The flag is derived fresh on every connect rather than latched once, so
+        installs that were wrongly flagged correct themselves without needing a
+        config-entry migration.
+        """
+        if self.entry.data.get(CONF_HAS_DOOR_SENSOR, False) == present:
+            return
+        logger.info(
+            "Door sensor %s on %s",
+            "detected" if present else "no longer detected",
+            self.lock_name,
         )
+        self.hass.config_entries.async_update_entry(
+            self.entry, data={**self.entry.data, CONF_HAS_DOOR_SENSOR: present}
+        )
+
+        # During setup the platforms have not been forwarded yet, so the new
+        # value is picked up without any reload. Once loaded, only a reload can
+        # add the door entities — worth it for someone who just paired a sensor.
+        #
+        # Reload on the positive only. If a probe and a 0xBA push ever disagreed
+        # about the door, reloading on both edges would let them trade the flag
+        # back and forth and reconnect the lock every time; clearing it can wait
+        # for the next natural reload instead. `_reloaded_for_door_sensor` caps
+        # it at one reload per connection lifetime as a second backstop.
+        if (
+            present
+            and not self._reloaded_for_door_sensor
+            and self.entry.state is ConfigEntryState.LOADED
+        ):
+            self._reloaded_for_door_sensor = True
+            self.hass.config_entries.async_schedule_reload(self.entry.entry_id)
 
     def _migrate_lock_model(self) -> None:
         """Refresh the stored model name from the serial.
@@ -420,8 +499,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         self.state.lock_state = lock_state
         self.state.lock_status = status
         self._track_firmware_state(lock_state)
-        if door_state != DOOR_STATE_UNKNOWN:
-            self.state.door_state = door_state
+        self._observe_door_state(door_state)
 
         # Only stand in for a *missed terminal* notification: settling out of a
         # transitional state. Anything else (including the first read after
@@ -602,11 +680,17 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             # start. GET_DOOR_STATE (0x37) returns the live sensor value.
             try:
                 door_state = await self._lock.get_door_state()
-                if door_state != DOOR_STATE_UNKNOWN:
-                    self.state.door_state = door_state
-                self._note_door_sensor_present()
+                self._observe_door_state(door_state)
+                if door_state == DOOR_STATE_UNKNOWN:
+                    # The lock answered, and answered "no door data".
+                    self._note_door_sensor_absent()
+            except CommandError:
+                # The lock rejected the command outright — also a clear "no
+                # sensor here", and how some firmware answers instead of UNKNOWN.
+                logger.debug("Lock rejected GET_DOOR_STATE (no door sensor?)", exc_info=True)
+                self._note_door_sensor_absent()
             except Exception:
-                logger.debug("Failed to get initial door state (no door sensor?)", exc_info=True)
+                logger.debug("Door state read failed, leaving sensor flag as-is", exc_info=True)
 
             # Mark available and notify entities
             self.state.available = True
@@ -792,8 +876,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     self.state.lock_state = notification["state"]
                     self.state.lock_status = notification["status"]
                     self._track_firmware_state(notification["state"])
-                    if notification["door_state"] != DOOR_STATE_UNKNOWN:
-                        self.state.door_state = notification["door_state"]
+                    self._observe_door_state(notification["door_state"])
                     # Only fire lock action event if lock state actually changed
                     # (door_sensor triggers send unchanged lock state — skip those)
                     if notification["state"] != prev_lock_state:
@@ -827,6 +910,9 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     self.async_set_updated_data(self.state)
 
                 elif notification["type"] == "accessory_battery":
+                    # Deliberately not treated as door-sensor evidence: 0xD5
+                    # carries an accessory id but no type, so a keypad's
+                    # battery is indistinguishable from a door sensor's.
                     self.state.accessory_battery_level = notification["level"]
                     self.state.accessory_battery_id = notification["accessory_id"]
                     self.state.accessory_battery_timestamp = notification["timestamp"]

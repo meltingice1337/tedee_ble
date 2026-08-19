@@ -9,6 +9,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
@@ -17,13 +18,14 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
     CONF_DEVICE_ID,
+    CONF_HAS_DOOR_SENSOR,
     CONF_LOCK_MODEL,
     CONF_LOCK_NAME,
     CONF_SERIAL,
     CONF_UPDATE_AVAILABLE,
     DOMAIN,
 )
-from .coordinator import TedeeCoordinator
+from .coordinator import TedeeCoordinator, async_remove_stale_entity
 from .tedee_lib.lock_commands import DOOR_STATE_OPEN, DOOR_STATE_UNKNOWN, LOCK_STATE_UPDATING
 
 logger = logging.getLogger(__name__)
@@ -36,11 +38,18 @@ async def async_setup_entry(
 ) -> None:
     """Set up Tedee binary sensors."""
     coordinator: TedeeCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([
-        TedeeDoorSensor(coordinator, entry),
-        TedeeBatteryChargingSensor(coordinator, entry),
-        TedeeFirmwareUpdateSensor(coordinator, entry),
-    ])
+    entities: list[BinarySensorEntity] = []
+    # Same gate as the door sensor's battery: with no sensor paired the lock
+    # never reports a door state, so this entity could only ever be unavailable.
+    if entry.data.get(CONF_HAS_DOOR_SENSOR):
+        entities.append(TedeeDoorSensor(coordinator, entry))
+    else:
+        async_remove_stale_entity(
+            hass, Platform.BINARY_SENSOR, f"{entry.data[CONF_DEVICE_ID]}_door"
+        )
+    entities.append(TedeeBatteryChargingSensor(coordinator, entry))
+    entities.append(TedeeFirmwareUpdateSensor(coordinator, entry))
+    async_add_entities(entities)
 
 
 class TedeeDoorSensor(CoordinatorEntity[TedeeCoordinator], BinarySensorEntity):

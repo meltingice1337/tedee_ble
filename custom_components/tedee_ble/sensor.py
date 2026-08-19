@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE
+from homeassistant.const import PERCENTAGE, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
@@ -28,7 +28,7 @@ from .const import (
     CONF_SERIAL,
     DOMAIN,
 )
-from .coordinator import TedeeCoordinator
+from .coordinator import TedeeCoordinator, async_remove_stale_entity
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,17 @@ async def async_setup_entry(
     coordinator: TedeeCoordinator = hass.data[DOMAIN][entry.entry_id]
     entities: list[SensorEntity] = [TedeeBatterySensor(coordinator, entry)]
     # Only locks with a door sensor paired can ever report its battery, and the
-    # coordinator has already probed for one by the time platforms are set up.
-    # Without this the entity would sit unavailable forever on most locks.
+    # coordinator has already probed for one by the time platforms are set up
+    # (async_setup awaits the first connect). Without this the entity would sit
+    # unavailable forever on most locks.
     if entry.data.get(CONF_HAS_DOOR_SENSOR):
         entities.append(TedeeDoorSensorBatterySensor(coordinator, entry))
+    else:
+        async_remove_stale_entity(
+            hass,
+            Platform.SENSOR,
+            f"{entry.data[CONF_DEVICE_ID]}_door_sensor_battery",
+        )
     async_add_entities(entities)
 
 
