@@ -90,6 +90,39 @@ class TedeeBatterySensor(CoordinatorEntity[TedeeCoordinator], SensorEntity):
         return self.coordinator.state.battery_level
 
     @property
+    def icon(self) -> str | None:
+        """Show a charging icon while the lock is on the charger.
+
+        Nothing in the frontend's icon path for a `sensor` knows about
+        charging: `stateIcon` has no `sensor` case, so the icon comes from the
+        `battery` device class range in core's `sensor/icons.json`, which is
+        purely numeric. The charging-aware helper (`batteryLevelIcon`) is only
+        reached via `ha-battery-icon`, which the device page uses but the tile
+        and entities cards do not. So the icon has to arrive as an attribute,
+        the same way the mobile companion app ships one.
+
+        Must stay a plain property: `Entity.icon` is a `cached_property` in
+        core, so a cached override would not re-evaluate when charging flips.
+        """
+        if not self.coordinator.state.battery_charging:
+            # None falls through to the device class range, which already
+            # tracks the level -- only charging needs spelling out here.
+            return None
+        level = self.coordinator.state.battery_level
+        if level is None:
+            return "mdi:battery-charging"
+        # Floor to 10 % steps to match core's range lookup, which selects the
+        # highest threshold <= value, so the icon does not jump a bucket the
+        # moment the charger goes on.
+        bucket = (level // 10) * 10
+        if bucket < 10:
+            return "mdi:battery-charging-outline"
+        if bucket >= 100:
+            # Core's own table maps 100 to the unsuffixed icon.
+            return "mdi:battery-charging"
+        return f"mdi:battery-charging-{bucket}"
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return additional battery attributes."""
         return {"charging": self.coordinator.state.battery_charging}
