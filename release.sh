@@ -133,6 +133,48 @@ gh release create "v${NEW_VERSION}" \
 # Clean up
 rm -f "$ZIP_NAME"
 
+RELEASE_URL="https://github.com/meltingice1337/tedee_ble/releases/tag/v${NEW_VERSION}"
+
+# Notify issues referenced from this release's commits. GitHub already autolinks
+# the "#N" refs inside the notes; this is the other direction, so whoever opened
+# the issue hears that a fix shipped instead of having to watch releases.
+# Require the ref to start a word, so "owner/repo#5" (another repo's issue) and
+# the like don't get mistaken for one of ours.
+ISSUE_REFS=$(printf '%s\n' "$COMMIT_LOG" \
+    | grep -oE '(^|[[:space:](])#[0-9]+' \
+    | grep -oE '[0-9]+' | sort -n -u || true)
+
+if [ -n "$ISSUE_REFS" ]; then
+    echo ""
+    echo -e "${CYAN}Issues referenced in this release:${NC} $(printf '#%s ' $ISSUE_REFS)"
+    NOTIFY=""
+    if [ -t 0 ]; then
+        # `|| true` so EOF on stdin cannot trip `set -e` after a good release.
+        read -rp "Comment on them? [y = comment / c = comment + close / N = skip]: " NOTIFY || NOTIFY=""
+    else
+        echo -e "${YELLOW}Non-interactive run - leaving issues alone${NC}"
+    fi
+    case "$NOTIFY" in
+        y|Y|c|C)
+            for N in $ISSUE_REFS; do
+                if gh issue comment "$N" --body "Released in [v${NEW_VERSION}](${RELEASE_URL})."; then
+                    echo -e "  ${GREEN}commented on #${N}${NC}"
+                else
+                    echo -e "  ${YELLOW}could not comment on #${N}${NC}"
+                fi
+                if [[ "$NOTIFY" =~ ^[cC]$ ]]; then
+                    if gh issue close "$N" --reason completed >/dev/null 2>&1; then
+                        echo -e "  ${GREEN}closed #${N}${NC}"
+                    else
+                        echo -e "  ${YELLOW}could not close #${N}${NC}"
+                    fi
+                fi
+            done
+            ;;
+        *) echo -e "${YELLOW}Skipped issue notifications${NC}" ;;
+    esac
+fi
+
 echo ""
 echo -e "${GREEN}Released v${NEW_VERSION}${NC}"
-echo -e "URL: https://github.com/meltingice1337/tedee_ble/releases/tag/v${NEW_VERSION}"
+echo -e "URL: ${RELEASE_URL}"
