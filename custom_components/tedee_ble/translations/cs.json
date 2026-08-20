@@ -1,0 +1,102 @@
+{
+    "config": {
+        "flow_title": "{name}",
+        "step": {
+            "user": {
+                "title": "Tedee Cloud API",
+                "description": "Zadejte svůj osobní přístupový klíč Tedee. Vytvoříte ho na [portálu Tedee]({tedee_portal_url}) v sekci Personal Access Keys.",
+                "data": {
+                    "api_key": "Osobní přístupový klíč"
+                }
+            },
+            "bluetooth_confirm": {
+                "title": "Nalezen zámek Tedee",
+                "description": "V okolí byl nalezen **{name}**. Nastavení dokončíte zadáním osobního přístupového klíče Tedee. Vytvoříte ho na [portálu Tedee]({tedee_portal_url}) v sekci Personal Access Keys.",
+                "data": {
+                    "api_key": "Osobní přístupový klíč"
+                }
+            },
+            "select_lock": {
+                "title": "Výběr zámku",
+                "description": "Vyberte zámek, který chcete přidat.",
+                "data": {
+                    "lock_selection": "Zámek"
+                }
+            },
+            "ble_address": {
+                "title": "BLE adresa",
+                "description": "Automatické vyhledávání nenašlo zámek {serial}. Ujistěte se, že je zámek v dosahu a probuzený (dotkněte se ho), a poté zadejte MAC adresu ručně. Najdete ji v aplikaci Tedee v nastavení zámku.",
+                "data": {
+                    "address": "MAC adresa"
+                }
+            },
+            "register": {
+                "title": "Registrace",
+                "description": "Generují se klíče a probíhá registrace v Tedee cloudu…"
+            },
+            "reauth_confirm": {
+                "title": "Opětovné přihlášení k Tedee",
+                "description": "Osobní přístupový klíč pro **{name}** už nefunguje — mohl být zneplatněn nebo nemá potřebná oprávnění. Zadejte nový klíč z [portálu Tedee]({tedee_portal_url}).",
+                "data": {
+                    "api_key": "Osobní přístupový klíč"
+                }
+            }
+        },
+        "error": {
+            "invalid_api_key": "Neplatný API klíč. Zkontrolujte svůj osobní přístupový klíč.",
+            "cannot_connect": "K Tedee Cloud API se nepodařilo připojit.",
+            "no_locks_found": "Na vašem účtu Tedee nebyly nalezeny žádné zámky.",
+            "invalid_mac": "Neplatná MAC adresa. Použijte formát XX:XX:XX:XX:XX:XX.",
+            "scan_failed": "Vyhledávání přes Bluetooth zámek nenašlo. Ujistěte se, že je v dosahu a probuzený. Zadejte adresu ručně níže.",
+            "lock_not_on_account": "Klíč funguje, ale tento zámek nepatří k jeho účtu. Použijte klíč z účtu, kterému zámek patří.",
+            "registration_failed": "Registrace v Tedee cloudu selhala."
+        },
+        "abort": {
+            "all_locks_configured": "Všechny zámky na tomto účtu jsou už nastavené.",
+            "already_configured": "Tento zámek je už nastavený.",
+            "not_supported": "Toto zařízení Tedee není podporovaný zámek.",
+            "insufficient_scopes": "Vašemu osobnímu přístupovému klíči chybí potřebná oprávnění. Na portálu Tedee klíč upravte, povolte plná oprávnění pro zařízení a certifikáty a poté integraci přidejte znovu.",
+            "reauth_successful": "Opětovné přihlášení proběhlo úspěšně.",
+            "registration_failed": "Registrace v Tedee cloudu selhala. Podrobnosti najdete v logu."
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "Nastavení zámku Tedee",
+                "data": {
+                    "auto_pull": "Zatáhnout západku při odemknutí"
+                },
+                "data_description": {
+                    "auto_pull": "Když je zapnuto (výchozí), odemknutí zároveň zatáhne západku a otevře dveře. Vypněte, pokud chcete odemknout bez zatažení."
+                }
+            }
+        }
+    },
+    "entity": {
+        "lock": {
+            "lock": {
+                "name": "Zámek"
+            }
+        },
+        "binary_sensor": {
+            "door": {
+                "name": "Dveře"
+            },
+            "battery_charging": {
+                "name": "Nabíjení baterie"
+            },
+            "firmware_update": {
+                "name": "Aktualizace firmwaru"
+            }
+        },
+        "sensor": {
+            "battery": {
+                "name": "Baterie"
+            },
+            "door_sensor_battery": {
+                "name": "Baterie senzoru dveří"
+            }
+        }
+    }
+}
