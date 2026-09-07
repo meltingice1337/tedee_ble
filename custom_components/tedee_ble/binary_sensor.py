@@ -21,9 +21,11 @@ from .const import (
     CONF_HAS_DOOR_SENSOR,
     CONF_LOCK_MODEL,
     CONF_LOCK_NAME,
+    CONF_RECHARGEABLE,
     CONF_SERIAL,
     CONF_UPDATE_AVAILABLE,
     DOMAIN,
+    resolve_rechargeable,
 )
 from .coordinator import TedeeCoordinator, async_remove_stale_entity
 from .tedee_lib.lock_commands import DOOR_STATE_OPEN, DOOR_STATE_UNKNOWN, LOCK_STATE_UPDATING
@@ -47,7 +49,20 @@ async def async_setup_entry(
         async_remove_stale_entity(
             hass, Platform.BINARY_SENSOR, f"{entry.data[CONF_DEVICE_ID]}_door"
         )
-    entities.append(TedeeBatteryChargingSensor(coordinator, entry))
+    # GO locks run on disposable CR123A cells and can never charge, so the
+    # charging entity would sit at "off" forever (issue #13). Entries created
+    # before the flag was stored derive it from the serial.
+    rechargeable = entry.data.get(CONF_RECHARGEABLE)
+    if rechargeable is None:
+        rechargeable = resolve_rechargeable(None, entry.data.get(CONF_SERIAL, ""))
+    if rechargeable:
+        entities.append(TedeeBatteryChargingSensor(coordinator, entry))
+    else:
+        async_remove_stale_entity(
+            hass,
+            Platform.BINARY_SENSOR,
+            f"{entry.data[CONF_DEVICE_ID]}_battery_charging",
+        )
     entities.append(TedeeFirmwareUpdateSensor(coordinator, entry))
     async_add_entities(entities)
 

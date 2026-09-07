@@ -24,12 +24,14 @@ from .const import (
     CONF_LOCK_NAME,
     CONF_MOBILE_ID,
     CONF_PRIVATE_KEY_PEM,
+    CONF_RECHARGEABLE,
     CONF_SERIAL,
     CONF_SIGNED_TIME,
     CONF_UPDATE_AVAILABLE,
     CONF_USER_MAP,
     DOMAIN,
     resolve_lock_model,
+    resolve_rechargeable,
 )
 from .tedee_lib.ble import serial_to_service_uuid, service_uuid_to_serial
 from .tedee_lib.cloud_api import CloudAPIError, TedeeCloudAPI
@@ -355,6 +357,7 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
         serial = lock.get("serialNumber", "")
         lock_name = lock.get("name", "Lock")
         lock_model = resolve_lock_model(lock.get("type"), serial)
+        rechargeable = resolve_rechargeable(lock.get("type"), serial)
         sw_info = (lock.get("softwareVersions") or [{}])[0]
         firmware_version = sw_info.get("version", "")
         update_available = sw_info.get("updateAvailable", False)
@@ -397,6 +400,7 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
                 CONF_SERIAL: serial,
                 CONF_LOCK_NAME: lock_name,
                 CONF_LOCK_MODEL: lock_model,
+                CONF_RECHARGEABLE: rechargeable,
                 CONF_MOBILE_ID: mobile_id,
                 CONF_PRIVATE_KEY_PEM: private_key_pem,
                 CONF_CERTIFICATE: certificate,

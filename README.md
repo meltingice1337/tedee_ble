@@ -39,7 +39,7 @@ Control your Tedee smart lock over **Bluetooth Low Energy** directly from Home A
 - **Lock, Unlock, and Open** - Full lock control including pull spring (open latch) support. The lock entity also surfaces transitional states like `locking`, `unlocking`, `partially_unlocked`, and `jammed`
 - **Auto-pull on unlock** - Optional setting; when **disabled**, the integration sends `UNLOCK_NO_PULL` so the lock-side auto-pull setting (configured in the Tedee mobile app) is overridden — the Home Assistant toggle is the single source of truth for spring-pull behavior
 - **Door open/closed sensor** - If your Tedee lock has the optional **door sensor** accessory installed, the integration exposes a binary sensor showing whether the door is open or closed
-- **Battery monitoring** - Battery percentage as a sensor, plus a separate charging binary sensor. The battery sensor's icon switches to a charging icon while the lock is on the charger, and still carries a `charging` attribute alongside it
+- **Battery monitoring** - Battery percentage as a sensor, plus a separate charging binary sensor on rechargeable models (PRO / PRO 2; GO runs on CR123A cells and gets no charging entity). The battery sensor's icon switches to a charging icon while the lock is on the charger, and still carries a `charging` attribute alongside it
 - **Real-time state updates** - Lock state changes are pushed instantly via BLE notifications, with a 10-minute polling safety net and a 45-second keep-alive
 - **Jam detection** - The lock reports if it gets jammed during locking or unlocking
 - **Activity tracking** - See who triggered the last action and how (see [details below](#activity-tracking))
@@ -102,7 +102,7 @@ The integration creates the following entities per lock, all grouped under a sin
 | **Door** | `binary_sensor` | Door open/closed state. Requires the optional **Tedee door sensor** accessory to be installed on the lock. |
 | **Battery** | `sensor` | Battery percentage. Icon switches to `mdi:battery-charging-*` while charging. Still exposes a `charging` attribute, kept for backwards compatibility and used by the custom card. Diagnostic. |
 | **Door sensor battery** | `sensor` | Battery percentage of the **door sensor accessory**. Only created when a door sensor is paired. See the note below on when it populates. Diagnostic. |
-| **Battery charging** | `binary_sensor` | On while the lock is charging. This is what Home Assistant's `battery.is_charging` condition and `battery.started_charging` / `battery.stopped_charging` triggers bind to — they match on device class, so they cannot read the attribute above. Diagnostic. |
+| **Battery charging** | `binary_sensor` | On while the lock is charging. Only created for rechargeable models (PRO / PRO 2), not for GO. This is what Home Assistant's `battery.is_charging` condition and `battery.started_charging` / `battery.stopped_charging` triggers bind to — they match on device class, so they cannot read the attribute above. Diagnostic. |
 | **Firmware update** | `binary_sensor` | On while a firmware update is available **or** being applied. Exposes a `status` attribute (`available` / `updating` / `idle`). Diagnostic. |
 
 Each lock-state change also fires a `tedee_ble_lock_action` event on the bus (with `action`, `trigger`, `user`, `entity_id`, `lock_name`) — useful for automations and the logbook.

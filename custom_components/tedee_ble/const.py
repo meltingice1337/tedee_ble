@@ -20,6 +20,7 @@ CONF_AUTO_PULL = "auto_pull"  # Unlock also pulls spring
 CONF_FIRMWARE_VERSION = "firmware_version"
 CONF_UPDATE_AVAILABLE = "update_available"
 CONF_HAS_DOOR_SENSOR = "has_door_sensor"  # a door sensor accessory is paired
+CONF_RECHARGEABLE = "rechargeable"  # lock has a built-in rechargeable battery
 
 # Tedee API device type → model name
 DEVICE_TYPE_MODELS = {
@@ -31,6 +32,33 @@ DEVICE_TYPE_MODELS = {
     # 1=Bridge, 3=Keypad, 5=Gate, 6=DryContact, 8=Door Sensor,
     # 9=Fingerprint, 10=Keypad PRO
 }
+
+# Device types that run on disposable cells (GO / GO 2: 3x CR123A) and so can
+# never report charging. The BLE battery response and the cloud lock
+# properties carry a charging flag for every model regardless -- the official
+# app also keys its battery UI purely on the device type -- so the model is
+# the only signal there is. Unknown types default to rechargeable: a useless
+# charging entity is a smaller mistake than hiding a real one (issue #13).
+NON_RECHARGEABLE_DEVICE_TYPES = {4}
+
+
+def _device_type_from_serial(serial: str) -> int | None:
+    """Return the device type encoded in characters 4-5 of the serial."""
+    digits = serial.replace("-", "")
+    if len(digits) >= 6 and digits[4:6].isdigit():
+        return int(digits[4:6])
+    return None
+
+
+def resolve_rechargeable(device_type: int | None, serial: str) -> bool:
+    """Whether a lock has a rechargeable battery (see NON_RECHARGEABLE_DEVICE_TYPES).
+
+    Falls back to the serial when the cloud type is unknown, so it can also
+    be derived for config entries created before this flag was stored.
+    """
+    if device_type is None:
+        device_type = _device_type_from_serial(serial)
+    return device_type not in NON_RECHARGEABLE_DEVICE_TYPES
 
 
 def resolve_lock_model(device_type: int | None, serial: str) -> str:
@@ -44,8 +72,8 @@ def resolve_lock_model(device_type: int | None, serial: str) -> str:
     from characters 4-5.
     """
     digits = serial.replace("-", "")
-    if device_type is None and len(digits) >= 6 and digits[4:6].isdigit():
-        device_type = int(digits[4:6])
+    if device_type is None:
+        device_type = _device_type_from_serial(serial)
     model = DEVICE_TYPE_MODELS.get(device_type, "Lock")
     if (
         model == "GO"
