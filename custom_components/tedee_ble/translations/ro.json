@@ -88,6 +88,9 @@
             },
             "firmware_update": {
                 "name": "Actualizare firmware"
+            },
+            "calibration_required": {
+                "name": "Calibrare necesară"
             }
         },
         "sensor": {

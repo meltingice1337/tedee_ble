@@ -19,6 +19,7 @@ from homeassistant.exceptions import (
     ConfigEntryNotReady,
     HomeAssistantError,
 )
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from homeassistant.components.bluetooth import (
@@ -53,6 +54,7 @@ from .const import (
     DOMAIN,
     resolve_lock_model,
     EVENT_LOCK_ACTION,
+    FIRMWARE_INFO_POLL_INTERVAL,
     FIRMWARE_REBOOT_WINDOW_SECONDS,
     FIRMWARE_REFRESH_DELAYS,
     KEEPALIVE_INTERVAL_SECONDS,
@@ -177,6 +179,9 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         # proxy were out of connection slots.
         self._firmware_updating: bool = False
         self._firmware_update_since: float | None = None
+        self._firmware_version_before_update: str = ""
+        self._firmware_refresh_task: asyncio.Task | None = None
+        self._unsub_firmware_poll = None
 
         # State
         self.state = TedeeState()
@@ -294,7 +299,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             self.entry, data={**self.entry.data, CONF_LOCK_MODEL: resolved}
         )
         dev_reg = dr.async_get(self.hass)
-        device = dev_reg.async_get_device(identifiers={(DOMAIN, str(self.device_id))})
+        device = self._get_device_entry(dev_reg)
         if device:
             dev_reg.async_update_device(device.id, model=resolved)
 
@@ -307,6 +312,20 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 await self._refresh_firmware_info()
             except Exception:
                 logger.debug("Firmware info fetch failed", exc_info=True)
+        else:
+            # The stored version / update flag can be stale: an update the
+            # app pushed while HA was down, or a restart that killed the
+            # post-update poll. Refresh off the critical path, and keep the
+            # flag honest with a slow periodic poll.
+            self.hass.async_create_background_task(
+                self._refresh_firmware_info_quietly(),
+                f"tedee_ble_{self.device_id}_firmware_startup_refresh",
+            )
+        self._unsub_firmware_poll = async_track_time_interval(
+            self.hass,
+            self._scheduled_firmware_poll,
+            FIRMWARE_INFO_POLL_INTERVAL,
+        )
 
         try:
             await self._connect()
@@ -328,6 +347,11 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             self._reconnect_task.cancel()
         if self._notification_task and not self._notification_task.done():
             self._notification_task.cancel()
+        if self._firmware_refresh_task and not self._firmware_refresh_task.done():
+            self._firmware_refresh_task.cancel()
+        if self._unsub_firmware_poll:
+            self._unsub_firmware_poll()
+            self._unsub_firmware_poll = None
         await self._disconnect()
         await super().async_shutdown()
 
@@ -376,11 +400,18 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             target_uuid = serial_to_service_uuid(serial).lower()
         except ValueError:
             return None
+        # After a firmware reboot the old MAC lingers in HA's discovery cache
+        # next to the new one (seen 2026-09-12: the stale address was returned
+        # and burned a 10-attempt connect). Prefer the most recently heard.
+        best = None
         for info in async_discovered_service_info(self.hass):
             if target_uuid in [str(u).lower() for u in info.service_uuids]:
-                logger.debug("Rediscovered %s at %s via service UUID", self.lock_name, info.address)
-                return info.device
-        return None
+                if best is None or getattr(info, "time", 0) > getattr(best, "time", 0):
+                    best = info
+        if best is None:
+            return None
+        logger.debug("Rediscovered %s at %s via service UUID", self.lock_name, best.address)
+        return best.device
 
     async def _wait_for_advertisement(self) -> object | None:
         """Wait for the lock to advertise and return its current BLEDevice.
@@ -468,17 +499,20 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         if lock_state == LOCK_STATE_UPDATING:
             if not self._firmware_updating:
                 logger.info("%s is applying a firmware update", self.lock_name)
+                self._firmware_version_before_update = self.entry.data.get(
+                    CONF_FIRMWARE_VERSION, ""
+                )
             self._firmware_updating = True
             self._firmware_update_since = time.monotonic()
         elif self._firmware_updating and lock_state != LOCK_STATE_UNKNOWN:
+            # The lock reports a normal state again a few seconds after
+            # UPDATING, but the actual reboot (new MAC, dropped link) follows
+            # minutes later. Keep _firmware_update_since so the reboot window
+            # still covers that late disconnect (observed 2026-09-12: LOCKED
+            # 5s after UPDATING, BLE drop + MAC change 3 minutes after).
             logger.info("%s firmware update complete", self.lock_name)
             self._firmware_updating = False
-            self._firmware_update_since = None
-            self.hass.async_create_task(
-                self._refresh_firmware_after_update(
-                    self.entry.data.get(CONF_FIRMWARE_VERSION, "")
-                )
-            )
+            self._start_firmware_refresh()
 
     def _apply_observed_state(
         self, lock_state: int, status: int, door_state: int
@@ -539,8 +573,12 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             self.state.last_user = "N/A"
 
     def _in_firmware_reboot_window(self) -> bool:
-        """True if the lock is (or just was) updating, within the reboot window."""
-        if not self._firmware_updating or self._firmware_update_since is None:
+        """True if the lock is (or just was) updating, within the reboot window.
+
+        Measured from the last UPDATING sighting, not from whether the lock
+        still says it is updating — the reboot lands well after it stops.
+        """
+        if self._firmware_update_since is None:
             return False
         return (
             time.monotonic() - self._firmware_update_since
@@ -696,6 +734,12 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             self.state.available = True
             self._reconnect_attempt = 0
             self._disconnect_time = None
+
+            # This is the reconnect after the post-update reboot: the lock is
+            # now running the new firmware and about to check in, so (re)start
+            # the cloud version poll from scratch.
+            if self._in_firmware_reboot_window() and not self._firmware_updating:
+                self._start_firmware_refresh()
 
             # Only push update if something actually changed, to avoid
             # resetting HA's "last_changed" timestamp on routine reconnects
@@ -1107,8 +1151,42 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         self._update_device_sw_version(fw_info["version"])
         logger.info("Firmware: %s (update: %s)", fw_info["version"], fw_info["updateAvailable"])
 
+    async def _refresh_firmware_info_quietly(self) -> None:
+        try:
+            await self._refresh_firmware_info()
+        except Exception:
+            logger.debug("Firmware info refresh failed", exc_info=True)
+
+    @callback
+    def _scheduled_firmware_poll(self, _now) -> None:
+        if self._shutting_down:
+            return
+        self.hass.async_create_background_task(
+            self._refresh_firmware_info_quietly(),
+            f"tedee_ble_{self.device_id}_firmware_poll",
+        )
+
+    @callback
+    def _start_firmware_refresh(self) -> None:
+        """(Re)start the post-update cloud version poll."""
+        if self._firmware_refresh_task and not self._firmware_refresh_task.done():
+            self._firmware_refresh_task.cancel()
+        self._firmware_refresh_task = self.hass.async_create_background_task(
+            self._refresh_firmware_after_update(self._firmware_version_before_update),
+            f"tedee_ble_{self.device_id}_firmware_refresh",
+        )
+
     async def _refresh_firmware_after_update(self, previous_version: str) -> None:
         """Re-read the firmware version from the cloud once an update finishes."""
+        try:
+            await self._poll_firmware_until_changed(previous_version)
+        except asyncio.CancelledError:
+            logger.debug("Firmware refresh poll cancelled")
+            raise
+        except Exception:
+            logger.warning("Firmware refresh poll crashed", exc_info=True)
+
+    async def _poll_firmware_until_changed(self, previous_version: str) -> None:
         for delay in FIRMWARE_REFRESH_DELAYS:
             await asyncio.sleep(delay)
             if self._shutting_down:
@@ -1120,6 +1198,10 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 continue
             if self.entry.data.get(CONF_FIRMWARE_VERSION) != previous_version:
                 return
+            # Cloud can bump the version before it clears the flag (or the
+            # other way round); either change means it has seen the lock.
+            if not self.entry.data.get(CONF_UPDATE_AVAILABLE, False):
+                return
         logger.warning(
             "%s still reports firmware %s after an update — cloud may not have "
             "seen it check in yet",
@@ -1127,12 +1209,24 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             previous_version,
         )
 
+    def _get_device_entry(self, dev_reg: dr.DeviceRegistry) -> dr.DeviceEntry | None:
+        """Look up this lock's device registry entry.
+
+        `async_get_device(identifiers=...)` is deprecated (removed in HA
+        2027.8) because identifiers are no longer unique across config
+        entries; the replacement is scoped to our entry. Fall back on older
+        cores that don't have it yet.
+        """
+        identifier = (DOMAIN, str(self.device_id))
+        lookup = getattr(dev_reg, "async_get_device_by_identifier", None)
+        if lookup is not None:
+            return lookup(identifier, self.entry.entry_id)
+        return dev_reg.async_get_device(identifiers={identifier})
+
     def _update_device_sw_version(self, version: str) -> None:
         """Update sw_version in the device registry."""
         dev_reg = dr.async_get(self.hass)
-        device = dev_reg.async_get_device(
-            identifiers={(DOMAIN, str(self.device_id))}
-        )
+        device = self._get_device_entry(dev_reg)
         if device:
             dev_reg.async_update_device(device.id, sw_version=version)
 

@@ -80,6 +80,15 @@ LOCK_STATE_NAMES = {
     0x12: "UPDATING",
 }
 
+# States in which the lock does not know its position and must be calibrated
+# from the app. UNKNOWN (0x09) is what a GO reports right after a firmware
+# reboot wiped its calibration; CALIBRATION is the app's wizard in progress.
+CALIBRATION_NEEDED_STATES = frozenset({
+    LOCK_STATE_UNCALIBRATED,
+    LOCK_STATE_CALIBRATION,
+    LOCK_STATE_UNKNOWN,
+})
+
 # States the lock passes through mid-move. It sends a terminal state
 # notification once it settles; if that one is missed the state read that
 # follows has to stand in for it.
@@ -200,7 +209,9 @@ class TedeeLock:
             except PTLSError as err:
                 # Duplicate of an earlier frame: its counter is already consumed
                 # so it can't decrypt. Discard it and wait for the real response.
-                logger.warning("Skipping undecryptable API frame: %s", err)
+                # Common on flaky adapters (bursts of 8 per keep-alive), so
+                # keep it out of the warning log.
+                logger.debug("Skipping undecryptable API frame: %s", err)
                 continue
             logger.debug("Command response raw: %s", decrypted.hex())
 

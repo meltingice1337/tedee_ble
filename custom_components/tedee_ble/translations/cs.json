@@ -88,6 +88,9 @@
             },
             "firmware_update": {
                 "name": "Aktualizace firmwaru"
+            },
+            "calibration_required": {
+                "name": "Vyžadována kalibrace"
             }
         },
         "sensor": {

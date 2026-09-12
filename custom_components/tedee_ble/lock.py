@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import CONF_AUTO_PULL, CONF_DEVICE_ID, CONF_FIRMWARE_VERSION, CONF_LOCK_MODEL, CONF_LOCK_NAME, CONF_SERIAL, DOMAIN
 from .coordinator import TedeeCoordinator
 from .tedee_lib.lock_commands import (
+    CALIBRATION_NEEDED_STATES,
     LOCK_STATE_LOCKED,
     LOCK_STATE_LOCKING,
     LOCK_STATE_UNLOCKING,
@@ -76,9 +77,17 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
         return self.coordinator.state.lock_state == LOCK_STATE_UPDATING
 
     @property
+    def _needs_calibration(self) -> bool:
+        return self.coordinator.state.lock_state in CALIBRATION_NEEDED_STATES
+
+    @property
     def is_locked(self) -> bool | None:
-        """Return True if the lock is locked."""
-        if not self.available or self._is_updating:
+        """Return True if the lock is locked.
+
+        An uncalibrated lock (seen after a firmware update) doesn't know its
+        own position, so report unknown rather than "unlocked".
+        """
+        if not self.available or self._is_updating or self._needs_calibration:
             return None
         return self.coordinator.state.lock_state == LOCK_STATE_LOCKED
 
@@ -105,6 +114,7 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
             "last_trigger": self.coordinator.state.last_trigger,
             "last_user": self.coordinator.state.last_user,
             "is_updating": self._is_updating,
+            "needs_calibration": self._needs_calibration,
         }
 
     def _guard_updating(self) -> None:

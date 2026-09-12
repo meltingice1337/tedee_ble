@@ -1,5 +1,7 @@
 """Constants for the Tedee BLE integration."""
 
+from datetime import timedelta
+
 DOMAIN = "tedee_ble"
 
 # Config entry data keys
@@ -96,7 +98,7 @@ CERT_CHECK_INTERVAL_SECONDS = 6 * 3600  # 6 hours
 # After observing UPDATING, the lock reboots (and changes BLE MAC). For this long
 # after the last UPDATING sighting, treat connect failures as a reboot — retry
 # fast and rediscover by serial — instead of backing off as if proxy-exhausted.
-FIRMWARE_REBOOT_WINDOW_SECONDS = 300  # 5 minutes
+FIRMWARE_REBOOT_WINDOW_SECONDS = 600  # 10 minutes (reboot seen ~3 min after UPDATING)
 # How long to wait for the lock to advertise when its stored MAC has gone away.
 # Only spent when HA can't see the stored address at all, so it doesn't slow
 # down ordinary connect failures.
@@ -104,6 +106,9 @@ ADVERTISEMENT_WAIT_SECONDS = 20
 # sw_version comes from the cloud, which only learns the new version once the
 # lock checks in — that lags the reboot. Re-poll on this schedule until it moves.
 FIRMWARE_REFRESH_DELAYS = [30, 60, 120, 300, 600]
+# Slow background poll so "update available" doesn't go stale between the
+# monthly certificate refreshes (one cheap cloud call).
+FIRMWARE_INFO_POLL_INTERVAL = timedelta(hours=12)
 
 # Event bus event type for logbook
 EVENT_LOCK_ACTION = f"{DOMAIN}_lock_action"
