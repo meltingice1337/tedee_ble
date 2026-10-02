@@ -60,6 +60,7 @@ from .const import (
     KEEPALIVE_INTERVAL_SECONDS,
     POLL_INTERVAL_SECONDS,
     PROXY_EXHAUSTED_DELAY_INDEX,
+    REBOOT_ADVERTISEMENT_WAIT_SECONDS,
     RECONNECT_DELAYS,
     UNAVAILABLE_GRACE_SECONDS,
 )
@@ -357,21 +358,6 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
     def _resolve_ble_device(self, address: str) -> object:
         """Resolve BLEDevice from HA Bluetooth stack, fall back to address string."""
-        # During a firmware reboot the MAC changes, so the stored address is
-        # likely stale — connecting to it wastes a long timeout. Prefer whatever
-        # address is currently advertising this lock's serial.
-        if self._in_firmware_reboot_window():
-            rediscovered = self._rediscover_by_serial()
-            if rediscovered:
-                new_address = rediscovered.address.upper()
-                if new_address != address.upper():
-                    logger.warning(
-                        "MAC for %s changed during firmware update: %s -> %s",
-                        self.lock_name, address, new_address,
-                    )
-                    self._update_stored_address(new_address)
-                return rediscovered
-
         ble_device = async_ble_device_from_address(self.hass, address, connectable=True)
         if ble_device:
             logger.debug("Resolved BLEDevice: %s", ble_device.name)
@@ -393,6 +379,14 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
     def _rediscover_by_serial(self) -> object | None:
         """Search HA's discovered devices for the lock by its service UUID."""
+        info = self._latest_service_info()
+        if info is None:
+            return None
+        logger.debug("Rediscovered %s at %s via service UUID", self.lock_name, info.address)
+        return info.device
+
+    def _latest_service_info(self) -> object | None:
+        """Most recently heard advertisement carrying this lock's service UUID."""
         serial = self.serial
         if not serial:
             return None
@@ -408,18 +402,59 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             if target_uuid in [str(u).lower() for u in info.service_uuids]:
                 if best is None or getattr(info, "time", 0) > getattr(best, "time", 0):
                     best = info
-        if best is None:
-            return None
-        logger.debug("Rediscovered %s at %s via service UUID", self.lock_name, best.address)
-        return best.device
+        return best
 
-    async def _wait_for_advertisement(self) -> object | None:
+    async def _resolve_rebooting_lock(self) -> object:
+        """Resolve the lock inside the post-firmware-update reboot window.
+
+        The reboot changes the MAC, and until the lock advertises again the
+        only address HA knows is the dead one. Dialing it burns
+        bleak-retry-connector's whole ~57 s ladder, and a new MAC that shows up
+        meanwhile goes unnoticed until that gives up (2026-09-24: two stale
+        dials, ~95 s from drop to reconnect). So only dial an address heard
+        since the link dropped, and otherwise wait for one.
+        """
+        address = self.entry.data[CONF_ADDRESS]
+        lost_at = self._disconnect_time
+        info = self._latest_service_info()
+        if lost_at is not None and (info is None or info.time < lost_at):
+            device = await self._wait_for_advertisement(
+                lost_at, REBOOT_ADVERTISEMENT_WAIT_SECONDS
+            )
+            if device is None:
+                # Raise rather than dial the dead address: _reconnect retries
+                # fast inside the window and waits again.
+                raise HomeAssistantError(
+                    f"{self.lock_name} has not advertised since the link dropped "
+                    "(rebooting after firmware update?)"
+                )
+        elif info is not None:
+            device = info.device
+        else:
+            return self._resolve_ble_device(address)
+
+        new_address = device.address.upper()
+        if new_address != address.upper():
+            logger.warning(
+                "MAC for %s changed during firmware update: %s -> %s",
+                self.lock_name, address, new_address,
+            )
+            self._update_stored_address(new_address)
+        return device
+
+    async def _wait_for_advertisement(
+        self, since: float, timeout: int = ADVERTISEMENT_WAIT_SECONDS
+    ) -> object | None:
         """Wait for the lock to advertise and return its current BLEDevice.
 
         Unlike the cache lookups above, this genuinely waits for a *fresh*
-        advertisement (and asks HA for an active scan while it waits). That is
-        what a firmware update needs: the lock reboots onto a new BLE MAC and
-        is absent from HA's discovery cache until it advertises again.
+        advertisement — one heard after `since` (time.monotonic()) — and asks
+        HA for an active scan while it waits. That is what a firmware update
+        needs: the lock reboots onto a new BLE MAC and is absent from HA's
+        discovery cache until it advertises again. The `since` filter matters
+        because HA replays its advertisement history into new callbacks, so
+        without it the stale pre-reboot entry satisfies the wait instantly.
+        (service_info.time is CLOCK_MONOTONIC_COARSE, same clock as ours.)
 
         This replaces an earlier BleakScanner.discover() call, which could
         never have worked here: habluetooth rebinds bleak.BleakScanner to
@@ -436,22 +471,21 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
 
         logger.info(
             "Waiting up to %ds for %s to advertise (UUID: %s)...",
-            ADVERTISEMENT_WAIT_SECONDS, self.lock_name, target_uuid,
+            timeout, self.lock_name, target_uuid,
         )
         try:
             info = await async_process_advertisements(
                 self.hass,
-                lambda service_info: True,
+                lambda service_info: service_info.time > since,
                 BluetoothCallbackMatcher(
                     service_uuid=target_uuid, connectable=True
                 ),
                 BluetoothScanningMode.ACTIVE,
-                ADVERTISEMENT_WAIT_SECONDS,
+                timeout,
             )
         except asyncio.TimeoutError:
             logger.debug(
-                "%s did not advertise within %ds",
-                self.lock_name, ADVERTISEMENT_WAIT_SECONDS,
+                "%s did not advertise within %ds", self.lock_name, timeout,
             )
             return None
         logger.info("%s advertised at %s", self.lock_name, info.address)
@@ -597,14 +631,18 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             # Refresh certificate if needed
             await self._refresh_certificate_if_needed()
 
-            data = self.entry.data
-
             # Create BLE transport
-            ble_device = self._resolve_ble_device(data[CONF_ADDRESS])
+            if self._in_firmware_reboot_window():
+                ble_device = await self._resolve_rebooting_lock()
+            else:
+                ble_device = self._resolve_ble_device(self.entry.data[CONF_ADDRESS])
+            # Read after resolving: either path may have stored a new MAC.
+            data = self.entry.data
             self._transport = TedeeBLETransport(
                 ble_device,
                 disconnect_callback=self._on_disconnect,
             )
+            dial_started = time.monotonic()
             try:
                 await self._transport.connect()
             except Exception as connect_err:
@@ -623,7 +661,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     # fine and the failure was something else (no free proxy
                     # slot, timeout) — don't stall the retry ladder on it.
                     recovered = await self._retry_at_new_address(
-                        "advertisement", await self._wait_for_advertisement()
+                        "advertisement", await self._wait_for_advertisement(dial_started)
                     )
                 if not recovered:
                     raise connect_err

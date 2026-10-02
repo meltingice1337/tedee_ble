@@ -103,6 +103,11 @@ FIRMWARE_REBOOT_WINDOW_SECONDS = 600  # 10 minutes (reboot seen ~3 min after UPD
 # Only spent when HA can't see the stored address at all, so it doesn't slow
 # down ordinary connect failures.
 ADVERTISEMENT_WAIT_SECONDS = 20
+# Inside the reboot window, how long one connect attempt waits for the lock to
+# advertise again after the link dropped. The rebooted lock took ~95 s to show up
+# on its new MAC (2026-09-24); dialing the dead old MAC meanwhile just burns
+# bleak-retry-connector's ~57 s ladder and misses the new one appearing.
+REBOOT_ADVERTISEMENT_WAIT_SECONDS = 120
 # sw_version comes from the cloud, which only learns the new version once the
 # lock checks in — that lags the reboot. Re-poll on this schedule until it moves.
 FIRMWARE_REFRESH_DELAYS = [30, 60, 120, 300, 600]
