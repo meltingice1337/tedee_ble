@@ -13,7 +13,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -166,6 +166,11 @@ class TedeeDoorSensorBatterySensor(CoordinatorEntity[TedeeCoordinator], RestoreS
                 self._restored_level = int(last.native_value)
             except (TypeError, ValueError):
                 self._restored_level = None
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Nothing here is keyed on entity_id; opts in to in-place renames (HA 2026.11+)."""
+        super().async_entity_id_changed(old_entity_id)
 
     @property
     def _level(self) -> int | None:

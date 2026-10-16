@@ -50,11 +50,6 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
         self._entry = entry
         self._attr_unique_id = f"{entry.data[CONF_DEVICE_ID]}_lock"
 
-    async def async_added_to_hass(self) -> None:
-        """Register entity_id with coordinator for logbook entries."""
-        await super().async_added_to_hass()
-        self.coordinator.lock_entity_id = self.entity_id
-
     @property
     def device_info(self) -> DeviceInfo:
         """Return device info, reading firmware version dynamically."""

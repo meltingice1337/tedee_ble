@@ -187,12 +187,21 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         # State
         self.state = TedeeState()
 
-        # Entity ID for logbook (set by lock entity in async_added_to_hass)
-        self.lock_entity_id: str | None = None
-
     @property
     def device_id(self) -> int:
         return self.entry.data[CONF_DEVICE_ID]
+
+    @property
+    def lock_entity_id(self) -> str | None:
+        """The lock entity's current entity_id, for logbook entries.
+
+        Resolved from the registry on each use rather than pushed by the
+        entity: from HA 2026.11 a rename changes the entity_id in place
+        without re-running async_added_to_hass, so a copy would go stale.
+        """
+        return er.async_get(self.hass).async_get_entity_id(
+            "lock", DOMAIN, f"{self.device_id}_lock"
+        )
 
     @property
     def serial(self) -> str:
