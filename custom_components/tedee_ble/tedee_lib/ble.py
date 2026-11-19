@@ -127,9 +127,23 @@ class TedeeBLETransport:
         logger.info("Subscribed to all characteristics")
 
     async def disconnect(self) -> None:
-        """Disconnect from the lock."""
-        if self._client and self._client.is_connected:
+        """Disconnect from the lock.
+
+        Call the client's disconnect() even when the link is already down: after
+        a lock-side drop bleak's BlueZ backend still holds its private D-Bus
+        connection, and BlueZ keeps that connection's StartNotify sessions alive
+        and re-registers them on the next connect, so every leaked client adds
+        one more copy of each notification. bleak skips the BlueZ Disconnect
+        call when not connected and only closes the bus.
+        """
+        if self._client is None:
+            return
+        was_connected = self._client.is_connected
+        try:
             await self._client.disconnect()
+        finally:
+            self._client = None
+        if was_connected:
             logger.info("Disconnected")
 
     def _on_ptls_tx(self, _sender: int, data: bytearray) -> None:
