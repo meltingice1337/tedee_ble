@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
 import voluptuous as vol
-from bleak import BleakScanner
 
-from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
+from homeassistant.components.bluetooth import (
+    BluetoothCallbackMatcher,
+    BluetoothScanningMode,
+    BluetoothServiceInfoBleak,
+    async_address_present,
+    async_discovered_service_info,
+    async_process_advertisements,
+)
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 
 from .const import (
@@ -45,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 MAC_REGEX = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
-BLE_SCAN_TIMEOUT = 15.0
+BLE_SCAN_TIMEOUT = 15
 
 
 class TedeeOptionsFlow(OptionsFlow):
@@ -301,15 +308,20 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
         """Step 3: Scan for BLE address, or enter manually."""
         errors: dict[str, str] = {}
 
-        if user_input is not None:
-            address = user_input[CONF_ADDRESS].strip().upper()
+        address = (user_input or {}).get(CONF_ADDRESS, "").strip().upper()
+        if address:
             if not MAC_REGEX.match(address):
                 errors["base"] = "invalid_mac"
+            elif not async_address_present(self.hass, address, connectable=True):
+                # The integration can only connect through an adapter or proxy
+                # that hears the lock, so an address HA cannot see would
+                # register with the cloud and then never set up.
+                errors["base"] = "address_not_visible"
             else:
                 self._address = address
                 return await self.async_step_register()
         else:
-            # Auto-scan for the lock by serial number
+            # First visit, or the form was submitted empty to scan again.
             serial = self._selected_lock.get("serialNumber", "")
             found_address = await self._scan_for_lock(serial)
             if found_address:
@@ -323,7 +335,9 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="ble_address",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_ADDRESS): str,
+                    vol.Optional(
+                        CONF_ADDRESS, description={"suggested_value": address}
+                    ): str,
                 }
             ),
             errors=errors,
@@ -333,17 +347,34 @@ class TedeeConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def _scan_for_lock(self, serial: str) -> str | None:
-        """Scan BLE for a Tedee lock by serial number. Returns MAC or None."""
+        """Find a Tedee lock by serial number over BLE. Returns MAC or None.
+
+        Goes through HA's Bluetooth stack rather than BleakScanner.discover():
+        inside HA that ignores its timeout and only returns the discovery
+        cache, so it could never wait for a lock that had not been heard yet.
+        """
         try:
             target_uuid = serial_to_service_uuid(serial).lower()
             logger.info("Scanning BLE for serial %s (UUID: %s)...", serial, target_uuid)
-            devices = await BleakScanner.discover(
-                timeout=BLE_SCAN_TIMEOUT, return_adv=True
+            # A stale MAC can linger in the cache next to the current one
+            # (firmware updates change it), so prefer the most recently heard.
+            heard = [
+                info
+                for info in async_discovered_service_info(self.hass, connectable=True)
+                if target_uuid in [str(u).lower() for u in info.service_uuids]
+            ]
+            if heard:
+                return max(heard, key=lambda info: info.time).address.upper()
+            info = await async_process_advertisements(
+                self.hass,
+                lambda service_info: True,
+                BluetoothCallbackMatcher(service_uuid=target_uuid, connectable=True),
+                BluetoothScanningMode.ACTIVE,
+                BLE_SCAN_TIMEOUT,
             )
-            for device, adv_data in devices.values():
-                service_uuids = [str(u).lower() for u in (adv_data.service_uuids or [])]
-                if target_uuid in service_uuids:
-                    return device.address.upper()
+            return info.address.upper()
+        except asyncio.TimeoutError:
+            logger.debug("Lock %s did not advertise within %ds", serial, BLE_SCAN_TIMEOUT)
         except Exception:
             logger.exception("BLE scan failed")
         return None

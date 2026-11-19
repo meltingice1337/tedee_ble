@@ -25,7 +25,7 @@
             },
             "ble_address": {
                 "title": "BLE Address",
-                "description": "Automatic scan did not find lock {serial}. Make sure the lock is nearby and awake (touch it), then enter the MAC address manually. You can find it in the Tedee app under lock settings.",
+                "description": "Home Assistant has not heard lock {serial} over Bluetooth. Make sure a Bluetooth adapter, or an ESPHome Bluetooth proxy with active connections enabled, is in range of the lock, then submit with the field empty to scan again. If you know the lock's MAC address you can enter it instead (the Tedee app shows it under lock settings).",
                 "data": {
                     "address": "MAC Address"
                 }
@@ -47,7 +47,8 @@
             "cannot_connect": "Could not connect to Tedee Cloud API.",
             "no_locks_found": "No locks found on your Tedee account.",
             "invalid_mac": "Invalid MAC address. Use format XX:XX:XX:XX:XX:XX.",
-            "scan_failed": "Bluetooth scan did not find the lock. Make sure it is nearby and awake. Enter the address manually below.",
+            "scan_failed": "Bluetooth scan did not find the lock. Make sure it is in range of a Bluetooth adapter or an active ESPHome proxy, then submit again to rescan, or enter the address below.",
+            "address_not_visible": "Home Assistant cannot see a connectable Bluetooth device at this address. Check the address, and that a Bluetooth adapter or an ESPHome proxy with 'active: true' is in range of the lock.",
             "lock_not_on_account": "That key works, but this lock is not on its account. Use a key from the account that owns the lock.",
             "registration_failed": "Registration with Tedee cloud failed."
         },

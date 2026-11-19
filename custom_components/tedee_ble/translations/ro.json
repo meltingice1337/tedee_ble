@@ -25,7 +25,7 @@
             },
             "ble_address": {
                 "title": "Adresa BLE",
-                "description": "Scanarea automata nu a gasit incuietoarea {serial}. Asigura-te ca incuietoarea este aproape si activa (atinge-o), apoi introdu adresa MAC manual. O poti gasi in aplicatia Tedee la setarile incuietorii.",
+                "description": "Home Assistant nu a detectat incuietoarea {serial} prin Bluetooth. Asigura-te ca un adaptor Bluetooth sau un proxy Bluetooth ESPHome cu conexiuni active este in raza incuietorii, apoi trimite formularul cu campul gol pentru a scana din nou. Daca stii adresa MAC a incuietorii, o poti introduce in schimb (aplicatia Tedee o afiseaza la setarile incuietorii).",
                 "data": {
                     "address": "Adresa MAC"
                 }
@@ -47,7 +47,8 @@
             "cannot_connect": "Nu s-a putut conecta la Tedee Cloud API.",
             "no_locks_found": "Nu s-au gasit incuietori in contul tau Tedee.",
             "invalid_mac": "Adresa MAC invalida. Foloseste formatul XX:XX:XX:XX:XX:XX.",
-            "scan_failed": "Scanarea Bluetooth nu a gasit incuietoarea. Asigura-te ca este aproape si activa. Introdu adresa manual mai jos.",
+            "scan_failed": "Scanarea Bluetooth nu a gasit incuietoarea. Asigura-te ca este in raza unui adaptor Bluetooth sau a unui proxy ESPHome activ, apoi trimite din nou pentru a rescana sau introdu adresa mai jos.",
+            "address_not_visible": "Home Assistant nu vede niciun dispozitiv Bluetooth conectabil la aceasta adresa. Verifica adresa si ca un adaptor Bluetooth sau un proxy ESPHome cu 'active: true' este in raza incuietorii.",
             "lock_not_on_account": "Cheia functioneaza, dar aceasta incuietoare nu este in contul ei. Foloseste o cheie din contul care detine incuietoarea.",
             "registration_failed": "Inregistrarea cu Tedee cloud a esuat."
         },

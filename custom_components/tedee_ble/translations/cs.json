@@ -25,7 +25,7 @@
             },
             "ble_address": {
                 "title": "BLE adresa",
-                "description": "Automatické vyhledávání nenašlo zámek {serial}. Ujistěte se, že je zámek v dosahu a probuzený (dotkněte se ho), a poté zadejte MAC adresu ručně. Najdete ji v aplikaci Tedee v nastavení zámku.",
+                "description": "Home Assistant zámek {serial} přes Bluetooth nezachytil. Ujistěte se, že je v dosahu zámku Bluetooth adaptér nebo ESPHome Bluetooth proxy s povolenými aktivními připojeními, a poté odešlete formulář s prázdným polem pro nové vyhledání. Pokud znáte MAC adresu zámku, můžete ji zadat (aplikace Tedee ji zobrazuje v nastavení zámku).",
                 "data": {
                     "address": "MAC adresa"
                 }
@@ -47,7 +47,8 @@
             "cannot_connect": "K Tedee Cloud API se nepodařilo připojit.",
             "no_locks_found": "Na vašem účtu Tedee nebyly nalezeny žádné zámky.",
             "invalid_mac": "Neplatná MAC adresa. Použijte formát XX:XX:XX:XX:XX:XX.",
-            "scan_failed": "Vyhledávání přes Bluetooth zámek nenašlo. Ujistěte se, že je v dosahu a probuzený. Zadejte adresu ručně níže.",
+            "scan_failed": "Vyhledávání přes Bluetooth zámek nenašlo. Ujistěte se, že je v dosahu Bluetooth adaptéru nebo aktivní ESPHome proxy, a poté odešlete znovu pro nové vyhledání, nebo zadejte adresu níže.",
+            "address_not_visible": "Home Assistant na této adrese nevidí žádné připojitelné Bluetooth zařízení. Zkontrolujte adresu a to, že je v dosahu zámku Bluetooth adaptér nebo ESPHome proxy s 'active: true'.",
             "lock_not_on_account": "Klíč funguje, ale tento zámek nepatří k jeho účtu. Použijte klíč z účtu, kterému zámek patří.",
             "registration_failed": "Registrace v Tedee cloudu selhala."
         },

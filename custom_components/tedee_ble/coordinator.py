@@ -95,6 +95,10 @@ from .tedee_lib.ptls import (
 logger = logging.getLogger(__name__)
 
 
+class LockNotVisibleError(HomeAssistantError):
+    """No connectable Bluetooth adapter or proxy has heard the lock."""
+
+
 @callback
 def async_remove_stale_entity(
     hass: HomeAssistant, platform: str, unique_id: str
@@ -341,11 +345,16 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             await self._connect()
         except asyncio.CancelledError:
             logger.warning("Setup of %s was cancelled, will retry", self.lock_name)
+            await self.async_shutdown()
             raise ConfigEntryNotReady(
                 f"Connection to {self.lock_name} was cancelled (device may be updating)"
             )
         except Exception as err:
             logger.error("Failed to connect to %s: %s", self.lock_name, err)
+            # HA retries setup with a fresh coordinator, so this one must not
+            # keep its firmware poll timer, or a half-open link whose drop
+            # would start it reconnecting in the background.
+            await self.async_shutdown()
             raise ConfigEntryNotReady(
                 f"Could not connect to {self.lock_name}: {err}"
             ) from err
@@ -366,7 +375,14 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         await super().async_shutdown()
 
     def _resolve_ble_device(self, address: str) -> object:
-        """Resolve BLEDevice from HA Bluetooth stack, fall back to address string."""
+        """Resolve the lock's BLEDevice from HA's Bluetooth stack.
+
+        Raises LockNotVisibleError when no connectable adapter or proxy has
+        heard the lock. Dialing the bare address instead cannot work — HA only
+        connects through a scanner that has seen the device — and all it left
+        in the log was habluetooth's "connect() called without
+        bleak-retry-connector" warning, which says nothing about the cause (#15).
+        """
         ble_device = async_ble_device_from_address(self.hass, address, connectable=True)
         if ble_device:
             logger.debug("Resolved BLEDevice: %s", ble_device.name)
@@ -383,8 +399,29 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             self._update_stored_address(new_address)
             return ble_device
 
-        logger.debug("BLEDevice not found, using address string")
-        return address
+        raise LockNotVisibleError(
+            f"Home Assistant cannot see {self.lock_name} ({address}) through any "
+            "connectable Bluetooth adapter or proxy. Check that the lock is in "
+            "range and, for an ESPHome proxy, that bluetooth_proxy has "
+            "'active: true'"
+        )
+
+    async def _resolve_or_wait_for_lock(self, address: str) -> object:
+        """Resolve the lock, waiting for it to advertise if HA cannot see it."""
+        try:
+            return self._resolve_ble_device(address)
+        except LockNotVisibleError:
+            device = await self._wait_for_advertisement(time.monotonic())
+            if device is None:
+                raise
+        new_address = device.address.upper()
+        if new_address != address.upper():
+            logger.warning(
+                "MAC address for %s changed: %s -> %s (via advertisement)",
+                self.lock_name, address, new_address,
+            )
+            self._update_stored_address(new_address)
+        return device
 
     def _rediscover_by_serial(self) -> object | None:
         """Search HA's discovered devices for the lock by its service UUID."""
@@ -644,7 +681,9 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             if self._in_firmware_reboot_window():
                 ble_device = await self._resolve_rebooting_lock()
             else:
-                ble_device = self._resolve_ble_device(self.entry.data[CONF_ADDRESS])
+                ble_device = await self._resolve_or_wait_for_lock(
+                    self.entry.data[CONF_ADDRESS]
+                )
             # Read after resolving: either path may have stored a new MAC.
             data = self.entry.data
             self._transport = TedeeBLETransport(
@@ -902,8 +941,15 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     self._reconnect_attempt = 0
                 # If the proxy is out of connection slots, retrying every 60s
                 # only keeps it busy and prevents recovery. Jump ahead in the
-                # backoff ladder so the proxy gets room to breathe.
-                elif "no backend with an available connection slot" in str(err).lower():
+                # backoff ladder so the proxy gets room to breathe. habluetooth
+                # raises the same message when no scanner can reach the lock at
+                # all, so only read it as exhaustion while the lock is still
+                # being heard.
+                elif "no backend with an available connection slot" in str(
+                    err
+                ).lower() and async_address_present(
+                    self.hass, self.entry.data[CONF_ADDRESS], connectable=True
+                ):
                     self._reconnect_attempt = max(
                         self._reconnect_attempt, PROXY_EXHAUSTED_DELAY_INDEX
                     )
