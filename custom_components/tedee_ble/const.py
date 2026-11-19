@@ -114,6 +114,8 @@ FIRMWARE_REFRESH_DELAYS = [30, 60, 120, 300, 600]
 # Slow background poll so "update available" doesn't go stale between the
 # monthly certificate refreshes (one cheap cloud call).
 FIRMWARE_INFO_POLL_INTERVAL = timedelta(hours=12)
+# Decrypted lock notifications kept in memory for the diagnostics download.
+NOTIFICATION_LOG_SIZE = 300
 
 # Event bus event type for logbook
 EVENT_LOCK_ACTION = f"{DOMAIN}_lock_action"

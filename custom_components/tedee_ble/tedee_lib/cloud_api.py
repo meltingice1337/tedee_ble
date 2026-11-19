@@ -85,6 +85,10 @@ class TedeeCloudAPI:
             )
         return result
 
+    async def get_raw(self, path: str, **params) -> dict:
+        """GET a path and return the whole response body (for diagnostics)."""
+        return await self._request("GET", path, params=params or None)
+
     async def get_devices(self) -> list[dict]:
         """Get all devices with details. Returns the locks list."""
         data = await self._request("GET", "/my/device/details")

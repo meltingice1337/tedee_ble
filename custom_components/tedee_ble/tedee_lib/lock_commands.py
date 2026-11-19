@@ -166,6 +166,10 @@ class TedeeLock:
         self.session = session
         self.door_state: int = initial_door_state
         self._consecutive_decrypt_failures: int = 0
+        # Optional sink for (epoch seconds, decrypted payload hex) of every
+        # notification, known or not; the coordinator points it at the buffer
+        # that the diagnostics download exports.
+        self.notification_log = None
 
     async def _send_command(self, command: bytes, timeout: float = 10.0) -> bytes:
         """Send an encrypted command and receive its response.
@@ -386,6 +390,8 @@ class TedeeLock:
             return None
 
         notify_id = data[0]
+        if self.notification_log is not None:
+            self.notification_log.append((time.time(), data.hex()))
 
         if notify_id == NOTIFY_LOCK_STATUS_CHANGE:
             lock_state = data[1] if len(data) > 1 else 0xFF

@@ -7,6 +7,7 @@ certificate refresh, and command dispatch.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
@@ -58,6 +59,7 @@ from .const import (
     FIRMWARE_REBOOT_WINDOW_SECONDS,
     FIRMWARE_REFRESH_DELAYS,
     KEEPALIVE_INTERVAL_SECONDS,
+    NOTIFICATION_LOG_SIZE,
     POLL_INTERVAL_SECONDS,
     PROXY_EXHAUSTED_DELAY_INDEX,
     REBOOT_ADVERTISEMENT_WAIT_SECONDS,
@@ -187,6 +189,12 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         self._firmware_version_before_update: str = ""
         self._firmware_refresh_task: asyncio.Task | None = None
         self._unsub_firmware_poll = None
+
+        # Last decrypted notifications as (epoch seconds, hex), kept across
+        # reconnects for the diagnostics download.
+        self.notification_log: deque[tuple[float, str]] = deque(
+            maxlen=NOTIFICATION_LOG_SIZE
+        )
 
         # State
         self.state = TedeeState()
@@ -773,6 +781,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 self._session,
                 initial_door_state=self.state.door_state,
             )
+            self._lock.notification_log = self.notification_log
 
             # Only set signed time when the lock requested it
             if _needs_signed_time:
