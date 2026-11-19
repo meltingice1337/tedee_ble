@@ -150,6 +150,28 @@ class TedeeCloudAPI:
         )
         return data.get("result", [])
 
+    async def get_pin_list(self, device_id: int) -> dict | list | None:
+        """PINs set on the lock's keypad, as the cloud lists them (id + alias).
+
+        None when the lock has no keypad (the cloud answers 428).
+        """
+        try:
+            data = await self._request("GET", f"/my/Lock/{device_id}/pin")
+        except CloudAPIError as err:
+            if err.status_code in (404, 428):
+                return None
+            raise
+        return data.get("result")
+
+    async def get_accessory_types(self, device_id: int) -> list[int]:
+        """Device types of the accessories paired to a lock."""
+        data = await self._request("GET", f"/my/lock/{device_id}/accessories")
+        return [
+            a["deviceType"]
+            for a in data.get("result") or []
+            if isinstance(a, dict) and isinstance(a.get("deviceType"), int)
+        ]
+
     async def get_firmware_info(self, device_id: int) -> dict:
         """Get firmware version and update status for a device."""
         locks = await self.get_devices()

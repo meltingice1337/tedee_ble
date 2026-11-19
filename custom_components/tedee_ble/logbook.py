@@ -42,6 +42,8 @@ def async_describe_events(
         action = ACTION_LABELS.get(data.get("action", ""), data.get("action", ""))
         trigger = data.get("trigger", "unknown")
         user = data.get("user", "N/A")
+        if data.get("method"):
+            trigger = f"{trigger}, {data['method']}"
 
         if user and user != "N/A":
             message = f"{action} by {user} ({trigger})"

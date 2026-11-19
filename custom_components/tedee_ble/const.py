@@ -18,6 +18,8 @@ CONF_DEVICE_PUBLIC_KEY = "device_public_key"
 CONF_SIGNED_TIME = "signed_time"
 CONF_LOCK_MODEL = "lock_model"
 CONF_USER_MAP = "user_map"  # {userId: username} from activity logs
+CONF_KEYPAD_NAMES = "keypad_names"
+CONF_FINGERPRINT_READER = "fingerprint_reader"
 CONF_AUTO_PULL = "auto_pull"  # Unlock also pulls spring
 CONF_FIRMWARE_VERSION = "firmware_version"
 CONF_UPDATE_AVAILABLE = "update_available"
@@ -116,6 +118,10 @@ FIRMWARE_REFRESH_DELAYS = [30, 60, 120, 300, 600]
 FIRMWARE_INFO_POLL_INTERVAL = timedelta(hours=12)
 # Decrypted lock notifications kept in memory for the diagnostics download.
 NOTIFICATION_LOG_SIZE = 300
+# The cloud activity log names a keypad use only once the lock has uploaded
+# it, which takes hours without a bridge. Retry on this schedule (seconds).
+KEYPAD_LEARN_DELAYS = [30, 300, 1800, 7200, 21600]
+KEYPAD_OBSERVATIONS_KEPT = 50
 
 # Event bus event type for logbook
 EVENT_LOCK_ACTION = f"{DOMAIN}_lock_action"

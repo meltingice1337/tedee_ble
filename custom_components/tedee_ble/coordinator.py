@@ -41,8 +41,10 @@ from .const import (
     CONF_CERTIFICATE,
     CONF_DEVICE_ID,
     CONF_DEVICE_PUBLIC_KEY,
+    CONF_FINGERPRINT_READER,
     CONF_FIRMWARE_VERSION,
     CONF_HAS_DOOR_SENSOR,
+    CONF_KEYPAD_NAMES,
     CONF_LOCK_MODEL,
     CONF_LOCK_NAME,
     CONF_MOBILE_ID,
@@ -59,12 +61,23 @@ from .const import (
     FIRMWARE_REBOOT_WINDOW_SECONDS,
     FIRMWARE_REFRESH_DELAYS,
     KEEPALIVE_INTERVAL_SECONDS,
+    KEYPAD_LEARN_DELAYS,
+    KEYPAD_OBSERVATIONS_KEPT,
     NOTIFICATION_LOG_SIZE,
     POLL_INTERVAL_SECONDS,
     PROXY_EXHAUSTED_DELAY_INDEX,
     REBOOT_ADVERTISEMENT_WAIT_SECONDS,
     RECONNECT_DELAYS,
     UNAVAILABLE_GRACE_SECONDS,
+)
+from .keypad_names import (
+    FINGERPRINT_READER_TYPES,
+    METHOD_FINGERPRINT,
+    METHOD_PIN,
+    METHODS,
+    fallback_name,
+    match_activity,
+    parse_pin_list,
 )
 from .tedee_lib.ble import TedeeBLETransport, serial_to_service_uuid
 from .tedee_lib.cloud_api import CloudAPIError, TedeeCloudAPI, certificate_needs_refresh
@@ -83,6 +96,8 @@ from .tedee_lib.lock_commands import (
     LOCK_STATE_UPDATING,
     STATUS_OK,
     TRANSITIONAL_LOCK_STATES,
+    TRIGGER_KEYPAD,
+    TRIGGER_KEYPAD_PIN,
     UNLOCK_NO_PULL,
     UNLOCK_NONE,
     TedeeLock,
@@ -137,6 +152,7 @@ class TedeeState:
     available: bool = False
     last_trigger: str = "unknown"  # What caused the last state change
     last_user: str = "N/A"  # Who triggered the last action
+    last_method: str | None = None  # Keypad use only: "pin" or "fingerprint"
     last_event_id: int = 0  # Incremented on each lock action event
     last_event_type: str = ""  # e.g. "locked", "unlocked"
 
@@ -195,6 +211,13 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         self.notification_log: deque[tuple[float, str]] = deque(
             maxlen=NOTIFICATION_LOG_SIZE
         )
+
+        # Keypad uses the lock reported as (epoch seconds, method, ID), kept to
+        # learn the names behind the IDs from the cloud activity log.
+        self._keypad_observations: deque[tuple[float, str, int]] = deque(
+            maxlen=KEYPAD_OBSERVATIONS_KEPT
+        )
+        self._keypad_learn_task: asyncio.Task | None = None
 
         # State
         self.state = TedeeState()
@@ -343,6 +366,10 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 self._refresh_firmware_info_quietly(),
                 f"tedee_ble_{self.device_id}_firmware_startup_refresh",
             )
+        self.hass.async_create_background_task(
+            self._refresh_keypad_names_quietly(),
+            f"tedee_ble_{self.device_id}_keypad_names_startup_refresh",
+        )
         self._unsub_firmware_poll = async_track_time_interval(
             self.hass,
             self._scheduled_firmware_poll,
@@ -376,6 +403,8 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             self._notification_task.cancel()
         if self._firmware_refresh_task and not self._firmware_refresh_task.done():
             self._firmware_refresh_task.cancel()
+        if self._keypad_learn_task and not self._keypad_learn_task.done():
+            self._keypad_learn_task.cancel()
         if self._unsub_firmware_poll:
             self._unsub_firmware_poll()
             self._unsub_firmware_poll = None
@@ -648,6 +677,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 "action": self.state.last_event_type,
                 "trigger": self.state.last_trigger,
                 "user": self.state.last_user,
+                "method": self.state.last_method,
             })
         elif lock_state != prev_lock_state and prev_lock_state == LOCK_STATE_UPDATING:
             # Back from a firmware update: the reboot ate the announcement, so
@@ -659,6 +689,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             ).lower()
             self.state.last_trigger = "unknown"
             self.state.last_user = "N/A"
+            self.state.last_method = None
 
     def _in_firmware_reboot_window(self) -> bool:
         """True if the lock is (or just was) updating, within the reboot window.
@@ -1029,7 +1060,11 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                         self.state.last_trigger = notification.get("trigger_name", "unknown")
                         # Resolve access_id to username
                         access_id = notification.get("access_id", 0)
-                        if access_id:
+                        method = self._keypad_method(notification.get("trigger"))
+                        self.state.last_method = method
+                        if method:
+                            self.state.last_user = self._keypad_user(method, access_id)
+                        elif access_id:
                             user_map = self.entry.data.get(CONF_USER_MAP, {})
                             username = user_map.get(str(access_id))
                             if username is None:
@@ -1046,6 +1081,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                             "action": self.state.last_event_type,
                             "trigger": self.state.last_trigger,
                             "user": self.state.last_user,
+                            "method": self.state.last_method,
                         })
                     self.async_set_updated_data(self.state)
 
@@ -1229,7 +1265,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             )
             user_map = await api.get_user_map(data[CONF_DEVICE_ID])
             fw_info = await api.get_firmware_info(data[CONF_DEVICE_ID])
-        new_data = {**data}
+        new_data = {**self.entry.data}
         new_data[CONF_CERTIFICATE] = cert_data["certificate"]
         new_data[CONF_CERT_EXPIRATION] = cert_data["expirationDate"]
         new_data[CONF_DEVICE_PUBLIC_KEY] = cert_data["devicePublicKey"]
@@ -1245,7 +1281,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         data = self.entry.data
         async with TedeeCloudAPI(data[CONF_API_KEY]) as api:
             fw_info = await api.get_firmware_info(data[CONF_DEVICE_ID])
-        new_data = {**data}
+        new_data = {**self.entry.data}
         new_data[CONF_FIRMWARE_VERSION] = fw_info["version"]
         new_data[CONF_UPDATE_AVAILABLE] = fw_info["updateAvailable"]
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
@@ -1266,6 +1302,10 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         self.hass.async_create_background_task(
             self._refresh_firmware_info_quietly(),
             f"tedee_ble_{self.device_id}_firmware_poll",
+        )
+        self.hass.async_create_background_task(
+            self._refresh_keypad_names_quietly(),
+            f"tedee_ble_{self.device_id}_keypad_names_poll",
         )
 
     @callback
@@ -1339,7 +1379,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             async with TedeeCloudAPI(data[CONF_API_KEY]) as api:
                 user_map = await api.get_user_map(data[CONF_DEVICE_ID])
             new_map = {str(k): v for k, v in user_map.items()}
-            new_data = {**data}
+            new_data = {**self.entry.data}
             new_data[CONF_USER_MAP] = new_map
             self.hass.config_entries.async_update_entry(self.entry, data=new_data)
             logger.debug("User map refreshed, now has %d users", len(new_map))
@@ -1348,11 +1388,119 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             logger.debug("Failed to refresh user map for access_id %d", access_id)
             return str(access_id)
 
+    def _keypad_method(self, trigger: int | None) -> str | None:
+        """How a keypad was used, from the trigger of a lock notification."""
+        if trigger == TRIGGER_KEYPAD_PIN:
+            return METHOD_PIN
+        # 0x17 is a fingerprint on a Keypad PRO (#16). Without a fingerprint
+        # reader paired, keep treating it as a keypad use of unknown kind.
+        if trigger == TRIGGER_KEYPAD and self.entry.data.get(CONF_FINGERPRINT_READER):
+            return METHOD_FINGERPRINT
+        return None
+
+    def _keypad_user(self, method: str, access_id: int) -> str:
+        """Name behind a PIN or fingerprint ID; starts learning it if unknown."""
+        names = self.entry.data.get(CONF_KEYPAD_NAMES, {}).get(method, {})
+        name = names.get(str(access_id))
+
+        # One use arrives as several notifications (pulling, pulled, unlocked).
+        now = time.time()
+        last = self._keypad_observations[-1] if self._keypad_observations else None
+        repeated = bool(
+            last and last[1:] == (method, access_id) and now - last[0] < 10
+        )
+        if not repeated:
+            self._keypad_observations.append((now, method, access_id))
+            if name is None:
+                self._start_keypad_learning()
+        return name or fallback_name(method, access_id)
+
+    @callback
+    def _start_keypad_learning(self) -> None:
+        """(Re)start the retries that look a new keypad ID up in the cloud."""
+        if self._shutting_down:
+            return
+        if self._keypad_learn_task and not self._keypad_learn_task.done():
+            self._keypad_learn_task.cancel()
+        self._keypad_learn_task = self.hass.async_create_background_task(
+            self._learn_keypad_names(),
+            f"tedee_ble_{self.device_id}_keypad_names_learn",
+        )
+
+    def _unnamed_keypad_observations(self) -> bool:
+        names = self.entry.data.get(CONF_KEYPAD_NAMES, {})
+        return any(
+            str(access_id) not in names.get(method, {})
+            for _, method, access_id in self._keypad_observations
+        )
+
+    async def _learn_keypad_names(self) -> None:
+        for delay in KEYPAD_LEARN_DELAYS:
+            await asyncio.sleep(delay)
+            if self._shutting_down:
+                return
+            await self._refresh_keypad_names_quietly()
+            if not self._unnamed_keypad_observations():
+                return
+
+    async def _refresh_keypad_names_quietly(self) -> None:
+        try:
+            await self._refresh_keypad_names()
+        except Exception:
+            logger.debug("Keypad names refresh failed", exc_info=True)
+
+    async def _refresh_keypad_names(self) -> None:
+        """Update PIN and fingerprint names from the cloud (see keypad_names.py)."""
+        data = self.entry.data
+        device_id = data[CONF_DEVICE_ID]
+        observations = list(self._keypad_observations)
+        pin_list = None
+        activities: list[dict] = []
+        async with TedeeCloudAPI(data[CONF_API_KEY]) as api:
+            accessory_types = await api.get_accessory_types(device_id)
+            if accessory_types:
+                pin_list = await api.get_pin_list(device_id)
+            if observations:
+                activities = await api.get_device_activity(device_id, limit=200)
+
+        stored = self.entry.data.get(CONF_KEYPAD_NAMES, {})
+        names = {method: dict(stored.get(method, {})) for method in METHODS}
+        from_cloud = parse_pin_list(pin_list)
+        learned = match_activity(observations, activities)
+        # The PIN list is complete, so it replaces what was stored; a deleted
+        # PIN's number can be handed to someone else. Fingerprints have no
+        # such list and only ever accumulate.
+        if pin_list is not None:
+            names[METHOD_PIN] = {
+                **learned.get(METHOD_PIN, {}),
+                **from_cloud.get(METHOD_PIN, {}),
+            }
+        else:
+            names[METHOD_PIN].update(learned.get(METHOD_PIN, {}))
+        names[METHOD_FINGERPRINT].update(learned.get(METHOD_FINGERPRINT, {}))
+        names[METHOD_FINGERPRINT].update(from_cloud.get(METHOD_FINGERPRINT, {}))
+        reader = any(t in FINGERPRINT_READER_TYPES for t in accessory_types)
+
+        current = self.entry.data
+        if (
+            names == {m: current.get(CONF_KEYPAD_NAMES, {}).get(m, {}) for m in METHODS}
+            and reader == current.get(CONF_FINGERPRINT_READER)
+        ):
+            return
+        self.hass.config_entries.async_update_entry(
+            self.entry,
+            data={**current, CONF_KEYPAD_NAMES: names, CONF_FINGERPRINT_READER: reader},
+        )
+        logger.debug(
+            "Keypad names refreshed: %d PIN(s), %d fingerprint(s)",
+            len(names[METHOD_PIN]), len(names[METHOD_FINGERPRINT]),
+        )
+
     async def _refresh_signed_time(self) -> None:
         """Refresh signed time from cloud API."""
         data = self.entry.data
         async with TedeeCloudAPI(data[CONF_API_KEY]) as api:
             signed_time = await api.get_signed_time()
-        new_data = {**data}
+        new_data = {**self.entry.data}
         new_data[CONF_SIGNED_TIME] = signed_time
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)

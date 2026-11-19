@@ -25,8 +25,10 @@ from .const import (
     CONF_API_KEY,
     CONF_CERT_EXPIRATION,
     CONF_DEVICE_ID,
+    CONF_FINGERPRINT_READER,
     CONF_FIRMWARE_VERSION,
     CONF_HAS_DOOR_SENSOR,
+    CONF_KEYPAD_NAMES,
     CONF_LOCK_MODEL,
     CONF_MOBILE_ID,
     CONF_RECHARGEABLE,
@@ -136,6 +138,8 @@ async def cloud_snapshot(api_key: str, mobile_id: str, device_id: int) -> tuple[
             api, "/my/deviceactivity", DeviceId=device_id, Elements=ACTIVITY_ENTRIES
         )
         report["lock_activity"] = activity
+        # PIN list: IDs to compare with what the lock reports (names redacted).
+        report["lock_pins"] = await _probe(api, f"/my/Lock/{device_id}/pin")
 
         devices = find_devices([details.get("result"), accessories.get("result")])
         report["accessory_probes"] = probes = {}
@@ -239,6 +243,12 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "rechargeable": data.get(CONF_RECHARGEABLE),
             "certificate_expiration": data.get(CONF_CERT_EXPIRATION),
             "ble_address": data.get(CONF_ADDRESS),
+            "fingerprint_reader": data.get(CONF_FINGERPRINT_READER),
+            # IDs a name is known for; the names themselves stay out.
+            "keypad_ids_with_name": {
+                method: sorted(names, key=int)
+                for method, names in data.get(CONF_KEYPAD_NAMES, {}).items()
+            },
             "options": dict(entry.options),
         },
     }
@@ -256,6 +266,10 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "notifications": [
                 {"time": round(ts, 1), "data": payload}
                 for ts, payload in coordinator.notification_log
+            ],
+            "keypad_uses": [
+                {"time": round(ts, 1), "method": method, "id": access_id}
+                for ts, method, access_id in coordinator._keypad_observations
             ],
         }
 

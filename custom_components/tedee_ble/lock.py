@@ -108,6 +108,7 @@ class TedeeLockEntity(CoordinatorEntity[TedeeCoordinator], LockEntity):
             "last_action": self.coordinator.state.last_event_type or None,
             "last_trigger": self.coordinator.state.last_trigger,
             "last_user": self.coordinator.state.last_user,
+            "last_method": self.coordinator.state.last_method,
             "is_updating": self._is_updating,
             "needs_calibration": self._needs_calibration,
         }

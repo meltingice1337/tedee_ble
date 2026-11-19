@@ -128,18 +128,19 @@ Use it for a low-battery alert, not as a live gauge.
 
 ### Activity tracking
 
-The lock entity exposes three attributes describing the most recent state change:
+The lock entity exposes these attributes describing the most recent state change:
 
 - **`last_action`** - the resulting state, e.g. `locked`, `unlocked`, `partially_unlocked`, `pulling`. The dashboard card uses this to render fine-grained states the core `lock` domain doesn't surface.
 - **`last_trigger`** tells you *how* it was triggered. The exact tokens you'll see in the attribute are:
   - `button` - physical button press on the lock
   - `remote` - BLE command from Home Assistant or phone
-  - `keypad` - PIN entry on a connected Tedee Keypad
+  - `keypad` - PIN or fingerprint on a connected Tedee Keypad (see `last_method`)
   - `auto_lock` - the lock's built-in auto-lock timer
   - `auto_unlock` / `auto` - auto-unlock feature
   - `door_sensor` - triggered by opening or closing the door
   - `manual` - turned by hand
 - **`last_user`** tells you *who* triggered it, resolved from a user ID to a name. The integration builds a mapping of user IDs to names from the Tedee Cloud API activity logs (including keypad PIN aliases). This map is automatically refreshed during periodic certificate renewals and whenever an unknown user is detected, so new shares are picked up without any manual action.
+- **`last_method`** is set for keypad use only: `pin`, or `fingerprint` on a Keypad PRO / fingerprint reader. For these, `last_user` is the name given to the PIN or fingerprint in the Tedee app. PIN names come from the Tedee Cloud PIN list. Fingerprint names are learned from the cloud activity log after a finger's first use, which can take hours without a Tedee bridge; until then you'll see e.g. `Fingerprint 28` or `PIN 2`.
 
 ## Dashboard card
 
