@@ -21,6 +21,7 @@ from homeassistant.exceptions import (
     HomeAssistantError,
 )
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from homeassistant.components.bluetooth import (
@@ -62,7 +63,10 @@ from .const import (
     FIRMWARE_REFRESH_DELAYS,
     KEEPALIVE_INTERVAL_SECONDS,
     KEYPAD_LEARN_DELAYS,
+    KEYPAD_OBSERVATION_MAX_AGE_SECONDS,
     KEYPAD_OBSERVATIONS_KEPT,
+    KEYPAD_STORE_SAVE_DELAY,
+    KEYPAD_STORE_VERSION,
     NOTIFICATION_LOG_SIZE,
     POLL_INTERVAL_SECONDS,
     PROXY_EXHAUSTED_DELAY_INDEX,
@@ -157,6 +161,11 @@ class TedeeState:
     last_event_type: str = ""  # e.g. "locked", "unlocked"
 
 
+def keypad_store_key(entry_id: str) -> str:
+    """Storage key of the keypad uses kept for a config entry."""
+    return f"{DOMAIN}.{entry_id}.keypad_uses"
+
+
 class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
     """Coordinator for a single Tedee BLE lock."""
 
@@ -213,9 +222,14 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         )
 
         # Keypad uses the lock reported as (epoch seconds, method, ID), kept to
-        # learn the names behind the IDs from the cloud activity log.
+        # learn the names behind the IDs from the cloud activity log. Stored
+        # on disk too: without a bridge the log is uploaded hours later, and
+        # Home Assistant may have restarted by then.
         self._keypad_observations: deque[tuple[float, str, int]] = deque(
             maxlen=KEYPAD_OBSERVATIONS_KEPT
+        )
+        self._keypad_store: Store[list[list]] = Store(
+            hass, KEYPAD_STORE_VERSION, keypad_store_key(entry.entry_id)
         )
         self._keypad_learn_task: asyncio.Task | None = None
 
@@ -351,6 +365,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
     async def async_setup(self) -> None:
         """Set up the coordinator — connect to the lock."""
         self._migrate_lock_model()
+        await self._load_keypad_observations()
 
         if not self.entry.data.get(CONF_FIRMWARE_VERSION):
             try:
@@ -1411,6 +1426,9 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         )
         if not repeated:
             self._keypad_observations.append((now, method, access_id))
+            self._keypad_store.async_delay_save(
+                self._keypad_observations_to_store, KEYPAD_STORE_SAVE_DELAY
+            )
             if name is None:
                 self._start_keypad_learning()
         return name or fallback_name(method, access_id)
@@ -1426,6 +1444,27 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             self._learn_keypad_names(),
             f"tedee_ble_{self.device_id}_keypad_names_learn",
         )
+
+    def _keypad_observations_to_store(self) -> list[list]:
+        return [list(observation) for observation in self._keypad_observations]
+
+    async def _load_keypad_observations(self) -> None:
+        """Restore the keypad uses seen before a restart, and resume learning."""
+        try:
+            stored = await self._keypad_store.async_load()
+        except Exception:
+            logger.debug("Stored keypad uses could not be read", exc_info=True)
+            return
+        oldest = time.time() - KEYPAD_OBSERVATION_MAX_AGE_SECONDS
+        for item in stored or []:
+            try:
+                when, method, access_id = float(item[0]), item[1], int(item[2])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if method in METHODS and when >= oldest:
+                self._keypad_observations.append((when, method, access_id))
+        if self._unnamed_keypad_observations():
+            self._start_keypad_learning()
 
     def _unnamed_keypad_observations(self) -> bool:
         names = self.entry.data.get(CONF_KEYPAD_NAMES, {})

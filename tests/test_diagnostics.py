@@ -13,6 +13,7 @@ from custom_components.tedee_ble.const import (
     CONF_ADDRESS,
     CONF_API_KEY,
     CONF_DEVICE_ID,
+    CONF_KEYPAD_NAMES,
     CONF_MOBILE_ID,
     CONF_PRIVATE_KEY_PEM,
     CONF_SERIAL,
@@ -27,7 +28,7 @@ KEYPAD_ID = 555001
 KEYPAD_SERIAL = "25181021-000123"
 KEYPAD_ADDRESS = "C4:11:22:33:44:55"
 SECRETS = ("the-api-key", "the-private-key", "mobile-1", SERIAL, KEYPAD_SERIAL,
-           ADDRESS, KEYPAD_ADDRESS, "Alice", "alice@example.com", "Front door")
+           ADDRESS, KEYPAD_ADDRESS, "Alice", "Bob", "alice@example.com", "Front door")
 
 
 class FakeCloudAPI:
@@ -55,8 +56,11 @@ class FakeCloudAPI:
                 }],
             }}
         if path == "/my/deviceactivity":
-            return {"result": [{"event": 77, "userId": 9, "username": "Alice",
-                                "userEmail": "alice@example.com", "pinAlias": "Alice"}]}
+            return {"result": [
+                {"event": 77, "userId": 9, "username": "Alice",
+                 "userEmail": "alice@example.com", "pinAlias": "Alice"},
+                {"event": 80, "userId": None, "username": None, "pinAlias": "Bob"},
+            ]}
         if path == "/my/devicecertificate/getformobile":
             assert params == {"mobileId": "mobile-1", "deviceId": KEYPAD_ID}
             return {"result": {"certificate": "CERT", "devicePublicKey": "PUB",
@@ -81,6 +85,7 @@ async def test_diagnostics_reports_accessories_without_secrets(hass: HomeAssista
             CONF_ADDRESS: ADDRESS, CONF_DEVICE_ID: DEVICE_ID, CONF_SERIAL: SERIAL,
             CONF_API_KEY: "the-api-key", CONF_MOBILE_ID: "mobile-1",
             CONF_PRIVATE_KEY_PEM: "the-private-key",
+            CONF_KEYPAD_NAMES: {"pin": {"0": "Alice"}, "fingerprint": {"28": "Bob", "3": "Alice"}},
         },
     )
     entry.add_to_hass(hass)
@@ -118,6 +123,17 @@ async def test_diagnostics_reports_accessories_without_secrets(hass: HomeAssista
     assert accessory["id"] == KEYPAD_ID and accessory["type"] == 10
     assert accessory["batteryLevel"] == 80
     assert cloud["lock_activity"]["result"][0]["event"] == 77
+
+    # People are placeholders: one per name, the same in every section.
+    alice, bob = (e["pinAlias"] for e in cloud["lock_activity"]["result"])
+    assert alice.startswith("name-") and bob.startswith("name-") and alice != bob
+    assert cloud["lock_activity"]["result"][0]["username"] == alice
+    assert cloud["lock_activity"]["result"][1]["username"] is None
+    assert cloud["lock_activity"]["result"][0]["userEmail"] == diagnostics.REDACTED
+    assert result["entry"]["keypad_names"] == {
+        "pin": {"0": alice}, "fingerprint": {"3": alice, "28": bob},
+    }
+    assert result["coordinator"]["state"]["last_user"] == alice
     assert cloud["lock_accessories"]["ok"] is False
 
     probe = cloud["accessory_probes"][str(KEYPAD_ID)]
@@ -162,3 +178,17 @@ async def test_diagnostics_without_coordinator_or_cloud(hass: HomeAssistant) -> 
     assert result["cloud"]["device_details"] == {"ok": False, "error": "CloudAPIError: HTTP 503: down"}
     assert result["cloud"]["accessory_probes"] == {}
     assert result["bluetooth"]["advertisements"] == []
+
+
+def test_last_user_fallbacks_are_kept() -> None:
+    """A number is not a name, and is what tells an unlearned ID apart."""
+    for text in ("N/A", "12345", "PIN 2", "Fingerprint 35"):
+        assert diagnostics._NOT_A_PERSON.match(text)
+    for text in ("Alice", "PIN code", "Fingerprint 3 left"):
+        assert not diagnostics._NOT_A_PERSON.match(text)
+
+
+def test_name_placeholders_depend_on_the_installation() -> None:
+    one, other = diagnostics.name_placeholders("key-1"), diagnostics.name_placeholders("key-2")
+    assert one("Alice") == one(" Alice ") != one("Bob")
+    assert one("Alice") != other("Alice")

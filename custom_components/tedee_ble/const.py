@@ -122,6 +122,11 @@ NOTIFICATION_LOG_SIZE = 300
 # it, which takes hours without a bridge. Retry on this schedule (seconds).
 KEYPAD_LEARN_DELAYS = [30, 300, 1800, 7200, 21600]
 KEYPAD_OBSERVATIONS_KEPT = 50
+# Unnamed uses are stored so a restart before that upload does not lose them.
+# Past this age the activity entry has scrolled out of what is fetched.
+KEYPAD_OBSERVATION_MAX_AGE_SECONDS = 30 * 24 * 3600
+KEYPAD_STORE_VERSION = 1
+KEYPAD_STORE_SAVE_DELAY = 5
 
 # Event bus event type for logbook
 EVENT_LOCK_ACTION = f"{DOMAIN}_lock_action"

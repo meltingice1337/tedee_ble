@@ -13,13 +13,19 @@ from custom_components.tedee_ble.const import (
     CONF_ADDRESS,
     CONF_DEVICE_ID,
     CONF_FIRMWARE_VERSION,
+    CONF_KEYPAD_NAMES,
     CONF_LOCK_MODEL,
     CONF_LOCK_NAME,
     CONF_SERIAL,
     DOMAIN,
     PROXY_EXHAUSTED_DELAY_INDEX,
 )
-from custom_components.tedee_ble.coordinator import LockNotVisibleError, TedeeCoordinator
+from custom_components.tedee_ble.coordinator import (
+    LockNotVisibleError,
+    TedeeCoordinator,
+    keypad_store_key,
+)
+from custom_components.tedee_ble.keypad_names import METHOD_FINGERPRINT
 
 from .conftest import ADDRESS, DEVICE_ID, SERIAL, SERVICE_UUID, service_info
 
@@ -134,3 +140,32 @@ async def test_no_slot_backoff_only_while_lock_is_heard(
 
     assert coordinator._reconnect_attempt == expected_attempt
     schedule.assert_called_once()
+
+
+async def test_keypad_uses_survive_a_restart(hass: HomeAssistant, coordinator, hass_storage) -> None:
+    """An unnamed keypad use is stored, and a new coordinator resumes learning it."""
+    with patch.object(coordinator, "_start_keypad_learning"):
+        assert coordinator._keypad_user(METHOD_FINGERPRINT, 35) == "Fingerprint 35"
+    await coordinator._keypad_store.async_save(coordinator._keypad_observations_to_store())
+
+    key = keypad_store_key(coordinator.entry.entry_id)
+    stored = hass_storage[key]["data"]
+    assert [item[1:] for item in stored] == [[METHOD_FINGERPRINT, 35]]
+    # Old, malformed and unknown entries are dropped on load.
+    hass_storage[key]["data"] = [[1.0, METHOD_FINGERPRINT, 1], ["x"], [stored[0][0], "nfc", 2], *stored]
+
+    restarted = TedeeCoordinator(hass, coordinator.entry)
+    with patch.object(restarted, "_start_keypad_learning") as learn:
+        await restarted._load_keypad_observations()
+    assert [o[1:] for o in restarted._keypad_observations] == [(METHOD_FINGERPRINT, 35)]
+    learn.assert_called_once()
+
+    # Nothing to learn once the ID has a name.
+    hass.config_entries.async_update_entry(
+        coordinator.entry,
+        data={**coordinator.entry.data, CONF_KEYPAD_NAMES: {METHOD_FINGERPRINT: {"35": "Bob"}}},
+    )
+    named = TedeeCoordinator(hass, coordinator.entry)
+    with patch.object(named, "_start_keypad_learning") as learn:
+        await named._load_keypad_observations()
+    learn.assert_not_called()

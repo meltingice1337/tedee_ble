@@ -13,9 +13,10 @@ from homeassistant.components.lovelace.resources import ResourceStorageCollectio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN
-from .coordinator import TedeeCoordinator
+from .const import DOMAIN, KEYPAD_STORE_VERSION
+from .coordinator import TedeeCoordinator, keypad_store_key
 
 logger = logging.getLogger(__name__)
 
@@ -91,3 +92,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         coordinator: TedeeCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
         await coordinator.async_shutdown()
     return unload_ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete what was stored on disk for a removed config entry."""
+    await Store(hass, KEYPAD_STORE_VERSION, keypad_store_key(entry.entry_id)).async_remove()

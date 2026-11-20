@@ -10,7 +10,10 @@ owns hardware the maintainer does not can report how it behaves.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import asdict
+import hashlib
+import hmac
 import re
 import time
 from typing import Any
@@ -36,6 +39,7 @@ from .const import (
     CONF_UPDATE_AVAILABLE,
     DOMAIN,
 )
+from .keypad_names import FALLBACK_LABELS
 from .tedee_lib.ble import serial_to_service_uuid
 from .tedee_lib.cloud_api import TedeeCloudAPI
 
@@ -48,6 +52,14 @@ _REDACT_KEY_PARTS = (
     "name", "mail", "serial", "mac", "key", "certificate", "token", "signature",
     "password", "ssid", "alias", "identity", "address", "latitude", "longitude",
     "location", "pin", "code", "phone", "wifi",
+)
+# Names of people (app users, PIN and fingerprint aliases) are replaced by a
+# placeholder instead: the same name gives the same placeholder everywhere in
+# the file and in later files from the same installation, so which keypad ID
+# belongs to which name can be followed without the name being disclosed.
+_PERSON_NAME_KEYS = ("alias", "username", "accesslinkname")
+_NOT_A_PERSON = re.compile(
+    rf"^(?:N/A|\d+|(?:{'|'.join(FALLBACK_LABELS.values())}) \d+)$"
 )
 # Per-device advertising UUID: the 14 serial digits padded with zeros.
 _SERIAL_UUID_RE = re.compile(r"^\d{4}0000-(\d{2})\d{2}-\d{4}-\d{2}00-0{12}$")
@@ -76,14 +88,37 @@ def mask(value: Any) -> Any:
     return value
 
 
-def redact(value: Any, key: str = "") -> Any:
-    """Redact personal data and secrets from a cloud response."""
+def name_placeholders(secret: str) -> Callable[[str], str]:
+    """Return a function replacing a person's name by a stable placeholder.
+
+    Keyed with a secret of this installation, so a placeholder cannot be
+    turned back into a name by trying likely names.
+    """
+    def placeholder(name: str) -> str:
+        digest = hmac.new(secret.encode(), name.strip().encode(), hashlib.sha256)
+        return f"name-{digest.hexdigest()[:6]}"
+    return placeholder
+
+
+def redact(value: Any, key: str = "", person: Callable[[str], str] | None = None) -> Any:
+    """Redact personal data and secrets from a cloud response.
+
+    With `person`, the names of people become placeholders rather than
+    being removed (see name_placeholders).
+    """
     if isinstance(value, dict):
-        return {k: redact(v, str(k)) for k, v in value.items()}
+        return {k: redact(v, str(k), person) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
-        return [redact(v, key) for v in value]
+        return [redact(v, key, person) for v in value]
     if value is None or isinstance(value, bool):
         return value
+    if (
+        person
+        and isinstance(value, str)
+        and value.strip()
+        and any(key.lower().endswith(part) for part in _PERSON_NAME_KEYS)
+    ):
+        return person(value)
     if any(part in key.lower() for part in _REDACT_KEY_PARTS):
         return REDACTED
     return value
@@ -138,7 +173,7 @@ async def cloud_snapshot(api_key: str, mobile_id: str, device_id: int) -> tuple[
             api, "/my/deviceactivity", DeviceId=device_id, Elements=ACTIVITY_ENTRIES
         )
         report["lock_activity"] = activity
-        # PIN list: IDs to compare with what the lock reports (names redacted).
+        # PIN list: IDs to compare with what the lock reports.
         report["lock_pins"] = await _probe(api, f"/my/Lock/{device_id}/pin")
 
         devices = find_devices([details.get("result"), accessories.get("result")])
@@ -167,7 +202,7 @@ async def cloud_snapshot(api_key: str, mobile_id: str, device_id: int) -> tuple[
                 }
             probe["mobile_certificate"] = cert
             probes[str(dev_id)] = probe
-    return redact(report), devices
+    return redact(report, person=name_placeholders(api_key)), devices
 
 
 def bluetooth_snapshot(hass: HomeAssistant, address: str, devices: dict[int, dict]) -> dict:
@@ -231,6 +266,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     """Return diagnostics for a config entry."""
     data = entry.data
     integration = await async_get_integration(hass, DOMAIN)
+    person = name_placeholders(data.get(CONF_API_KEY) or entry.entry_id)
     result: dict[str, Any] = {
         "integration_version": str(integration.version),
         "entry": {
@@ -244,9 +280,9 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "certificate_expiration": data.get(CONF_CERT_EXPIRATION),
             "ble_address": data.get(CONF_ADDRESS),
             "fingerprint_reader": data.get(CONF_FINGERPRINT_READER),
-            # IDs a name is known for; the names themselves stay out.
-            "keypad_ids_with_name": {
-                method: sorted(names, key=int)
+            # Which ID has which name, as placeholders (see name_placeholders).
+            "keypad_names": {
+                method: {i: person(names[i]) for i in sorted(names, key=int)}
                 for method, names in data.get(CONF_KEYPAD_NAMES, {}).items()
             },
             "options": dict(entry.options),
@@ -258,7 +294,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if coordinator is not None:
         state = asdict(coordinator.state)
-        state["last_user"] = REDACTED
+        if not _NOT_A_PERSON.match(state["last_user"]):
+            state["last_user"] = person(state["last_user"])
         result["coordinator"] = {
             "connected": coordinator.is_connected,
             "state": state,
