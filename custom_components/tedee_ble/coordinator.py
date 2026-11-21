@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
 import time
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
@@ -30,12 +31,15 @@ from homeassistant.components.bluetooth import (
     async_address_present,
     async_ble_device_from_address,
     async_discovered_service_info,
+    async_last_service_info,
     async_process_advertisements,
+    async_scanner_by_source,
 )
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import (
     CERT_CHECK_INTERVAL_SECONDS,
+    CONNECT_FAILURES_KEPT,
     CONF_ADDRESS,
     CONF_API_KEY,
     CONF_CERT_EXPIRATION,
@@ -220,6 +224,19 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         self.notification_log: deque[tuple[float, str]] = deque(
             maxlen=NOTIFICATION_LOG_SIZE
         )
+        # Why the lock could not be reached, also for the diagnostics download:
+        # the last failed connection attempts and some counters (#15).
+        self.connect_failures: deque[dict[str, Any]] = deque(
+            maxlen=CONNECT_FAILURES_KEPT
+        )
+        self.connect_stats: dict[str, Any] = {
+            "attempts": 0,
+            "successes": 0,
+            "disconnects": 0,
+            "last_connected": None,
+            "last_disconnected": None,
+        }
+        self._connect_stage = ""
 
         # Keypad uses the lock reported as (epoch seconds, method, ID), kept to
         # learn the names behind the IDs from the cloud activity log. Stored
@@ -718,6 +735,41 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         )
 
     async def _connect(self) -> None:
+        """Connect to the lock, keeping a record of a failed attempt."""
+        try:
+            await self._connect_once()
+        except Exception as err:
+            self._record_connect_failure(err)
+            raise
+
+    def _record_connect_failure(self, err: Exception) -> None:
+        """Note how far a connection attempt got and what Bluetooth offered."""
+        failure: dict[str, Any] = {
+            "time": round(time.time(), 1),
+            "stage": self._connect_stage,
+            "error": f"{type(err).__name__}: {err}"[:300],
+        }
+        try:
+            address = self.entry.data[CONF_ADDRESS]
+            failure["heard_by_any_scanner"] = async_address_present(
+                self.hass, address, connectable=False
+            )
+            # The connectable scanner with the best signal, which is the one
+            # Home Assistant dials through first.
+            info = async_last_service_info(self.hass, address, connectable=True)
+            if info is not None:
+                scanner = async_scanner_by_source(self.hass, info.source)
+                failure["best_connectable_scanner"] = (
+                    scanner.name if scanner else info.source
+                )
+                failure["rssi"] = info.rssi
+            else:
+                failure["best_connectable_scanner"] = None
+        except Exception:  # noqa: BLE001 - the error itself is what matters
+            logger.debug("Bluetooth state for a failed connect not read", exc_info=True)
+        self.connect_failures.append(failure)
+
+    async def _connect_once(self) -> None:
         """Full connection sequence: cert refresh → BLE → PTLS → init."""
         async with self._connecting_lock:
             if self.is_connected:
@@ -725,11 +777,14 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 return
 
             logger.info("Connecting to %s (%s)...", self.lock_name, self.entry.data[CONF_ADDRESS])
+            self.connect_stats["attempts"] += 1
 
             # Refresh certificate if needed
+            self._connect_stage = "certificate"
             await self._refresh_certificate_if_needed()
 
             # Create BLE transport
+            self._connect_stage = "find_lock"
             if self._in_firmware_reboot_window():
                 ble_device = await self._resolve_rebooting_lock()
             else:
@@ -743,6 +798,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 disconnect_callback=self._on_disconnect,
             )
             dial_started = time.monotonic()
+            self._connect_stage = "bluetooth_connect"
             try:
                 await self._transport.connect()
             except Exception as connect_err:
@@ -767,6 +823,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     raise connect_err
 
             # Create PTLS session and handshake
+            self._connect_stage = "secure_handshake"
             private_key = pem_to_private_key(data[CONF_PRIVATE_KEY_PEM].encode())
             self._session = PTLSSession(
                 self._transport,
@@ -820,6 +877,7 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                     raise
 
             # Create lock command interface
+            self._connect_stage = "first_commands"
             self._lock = TedeeLock(
                 self._transport,
                 self._session,
@@ -896,6 +954,9 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 f"tedee_ble_{self.device_id}_notifications",
             )
 
+            self._connect_stage = ""
+            self.connect_stats["successes"] += 1
+            self.connect_stats["last_connected"] = round(time.time(), 1)
             logger.info("Connected to %s successfully", self.lock_name)
 
     async def _disconnect(self) -> None:
@@ -927,6 +988,8 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         a grace period before showing entities as unavailable.
         """
         logger.warning("BLE disconnected from %s", self.lock_name)
+        self.connect_stats["disconnects"] += 1
+        self.connect_stats["last_disconnected"] = round(time.time(), 1)
 
         if not self._shutting_down:
             self._schedule_reconnect()

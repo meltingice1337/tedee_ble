@@ -92,6 +92,10 @@ async def test_diagnostics_reports_accessories_without_secrets(hass: HomeAssista
     coordinator = TedeeCoordinator(hass, entry)
     coordinator.notification_log.append((1763550000.0, "d550691d9a000008777900"))
     coordinator.state.last_user = "Alice"
+    coordinator.connect_failures.append({
+        "time": 1763550001.0, "stage": "bluetooth_connect",
+        "error": f"BleakError: {ADDRESS} not reachable",
+    })
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
 
     scanner = SimpleNamespace(name="proxy (AA:BB:CC:DD:EE:01)", connectable=True)
@@ -108,8 +112,29 @@ async def test_diagnostics_reports_accessories_without_secrets(hass: HomeAssista
             return_value=[SimpleNamespace(scanner=scanner, advertisement=SimpleNamespace(rssi=-70))],
         ),
         patch.object(diagnostics.bluetooth, "async_scanner_count", return_value=2),
+        patch.object(
+            diagnostics.bluetooth, "async_current_scanners", create=True,
+            return_value=[SimpleNamespace(
+                name="proxy (AA:BB:CC:DD:EE:01)", connectable=True,
+                get_allocations=lambda: SimpleNamespace(slots=3, free=0),
+            )],
+        ),
     ):
         result = await diagnostics.async_get_config_entry_diagnostics(hass, entry)
+
+    assert result["bluetooth"]["scanners"] == [{
+        "scanner": "proxy (AA:BB:CC:XX:XX:XX)", "connectable": True,
+        "connection_slots": 3, "free_slots": 0,
+    }]
+    connection = result["coordinator"]["connection"]
+    assert connection["attempts"] == 0 and connection["retry_number"] == 0
+    assert connection["failures"] == [{
+        "time": 1763550001.0, "stage": "bluetooth_connect",
+        "error": "BleakError: F8:F6:15:XX:XX:XX not reachable",
+    }]
+    assert set(result["cloud"]["lock_bridge"]) == {
+        "paired_bridge_id", "lock_connected_to_cloud",
+    }
 
     dumped = json.dumps(result)
     for secret in SECRETS:

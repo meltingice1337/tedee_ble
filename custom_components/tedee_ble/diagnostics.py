@@ -177,6 +177,12 @@ async def cloud_snapshot(api_key: str, mobile_id: str, device_id: int) -> tuple[
         report["lock_pins"] = await _probe(api, f"/my/Lock/{device_id}/pin")
 
         devices = find_devices([details.get("result"), accessories.get("result")])
+        # A bridge holds a connection to the lock of its own.
+        lock = devices.get(device_id, {})
+        report["lock_bridge"] = {
+            "paired_bridge_id": lock.get("connectedToId"),
+            "lock_connected_to_cloud": lock.get("isConnected"),
+        }
         report["accessory_probes"] = probes = {}
         for dev_id, device in devices.items():
             if device["type"] not in ACCESSORY_TYPES or dev_id == device_id:
@@ -203,6 +209,32 @@ async def cloud_snapshot(api_key: str, mobile_id: str, device_id: int) -> tuple[
             probe["mobile_certificate"] = cert
             probes[str(dev_id)] = probe
     return redact(report, person=name_placeholders(api_key)), devices
+
+
+def scanner_snapshot(hass: HomeAssistant) -> list[dict]:
+    """Every Bluetooth adapter and proxy, with its connection slots if it has any.
+
+    A proxy with no free slot hears the lock but cannot connect to it.
+    """
+    # Not in older Home Assistant releases.
+    current_scanners = getattr(bluetooth, "async_current_scanners", None)
+    if current_scanners is None:
+        return []
+    report = []
+    for scanner in current_scanners(hass):
+        item: dict[str, Any] = {
+            "scanner": scanner.name,
+            "connectable": scanner.connectable,
+        }
+        try:
+            slots = scanner.get_allocations()
+        except Exception:  # noqa: BLE001 - optional detail
+            slots = None
+        if slots is not None:
+            item["connection_slots"] = slots.slots
+            item["free_slots"] = slots.free
+        report.append(item)
+    return sorted(report, key=lambda item: item["scanner"])
 
 
 def bluetooth_snapshot(hass: HomeAssistant, address: str, devices: dict[int, dict]) -> dict:
@@ -255,6 +287,7 @@ def bluetooth_snapshot(hass: HomeAssistant, address: str, devices: dict[int, dic
         ]
 
     return {
+        "scanners": scanner_snapshot(hass),
         "scanner_count": bluetooth.async_scanner_count(hass, connectable=False),
         "connectable_scanner_count": bluetooth.async_scanner_count(hass, connectable=True),
         "advertisements": heard,
@@ -298,6 +331,13 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             state["last_user"] = person(state["last_user"])
         result["coordinator"] = {
             "connected": coordinator.is_connected,
+            # Why the lock is not reachable: counters, the retry the
+            # integration is on, and the last failed attempts.
+            "connection": {
+                **coordinator.connect_stats,
+                "retry_number": coordinator._reconnect_attempt,
+                "failures": list(coordinator.connect_failures),
+            },
             "state": state,
             # Decrypted lock notifications: first byte is the notification id.
             "notifications": [

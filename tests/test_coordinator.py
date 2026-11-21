@@ -190,3 +190,32 @@ async def test_keypad_uses_survive_a_restart(hass: HomeAssistant, coordinator, h
     with patch.object(named, "_start_keypad_learning") as learn:
         await named._load_keypad_observations()
     learn.assert_not_called()
+
+
+async def test_failed_connect_is_recorded(hass: HomeAssistant, coordinator) -> None:
+    """A failed attempt keeps its stage and error for the diagnostics download."""
+    with (
+        patch.object(coordinator, "_refresh_certificate_if_needed", AsyncMock()),
+        patch.object(
+            coordinator,
+            "_resolve_or_wait_for_lock",
+            AsyncMock(side_effect=LockNotVisibleError("gone")),
+        ),
+        patch("custom_components.tedee_ble.coordinator.async_address_present", return_value=True),
+        patch(
+            f"custom_components.tedee_ble.coordinator.async_last_service_info",
+            return_value=MagicMock(source="AA:BB:CC:DD:EE:01", rssi=-78),
+        ),
+        patch("custom_components.tedee_ble.coordinator.async_scanner_by_source", return_value=None),
+        pytest.raises(LockNotVisibleError),
+    ):
+        await coordinator._connect()
+
+    assert coordinator.connect_stats["attempts"] == 1
+    assert coordinator.connect_stats["successes"] == 0
+    (failure,) = coordinator.connect_failures
+    assert failure["stage"] == "find_lock"
+    assert failure["error"] == "LockNotVisibleError: gone"
+    assert failure["heard_by_any_scanner"] is True
+    assert failure["best_connectable_scanner"] == "AA:BB:CC:DD:EE:01"
+    assert failure["rssi"] == -78
