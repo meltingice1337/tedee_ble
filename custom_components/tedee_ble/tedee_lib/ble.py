@@ -106,16 +106,7 @@ class TedeeBLETransport:
             await self._client.connect()
             logger.debug("Connected via direct BleakClient")
 
-        # Acquire MTU from BlueZ before accessing mtu_size.
-        # HA wraps BleakClient in HaBleakClientWrapper, so reach through to _backend.
-        backend = getattr(self._client, '_backend', self._client)
-        if hasattr(backend, '_acquire_mtu'):
-            try:
-                await backend._acquire_mtu()
-            except Exception:
-                logger.debug("Failed to acquire MTU, using default", exc_info=True)
-
-        self._mtu = self._client.mtu_size
+        self._mtu = await self._read_mtu()
         logger.info("Connected (MTU: %d)", self._mtu)
 
         # Subscribe to PTLS TX notifications
@@ -125,6 +116,26 @@ class TedeeBLETransport:
         # Subscribe to API Commands indications
         await self._client.start_notify(CHAR_API_COMMANDS, self._on_api_command)
         logger.info("Subscribed to all characteristics")
+
+    async def _read_mtu(self) -> int:
+        """ATT MTU of the connection."""
+        # BlueZ 5.62+ and the ESPHome proxies know the MTU without being asked.
+        char = self._client.services.get_characteristic(CHAR_PTLS_RX)
+        if char is not None and char.max_write_without_response_size > 20:
+            return char.max_write_without_response_size + 3
+
+        # Older BlueZ only tells it through AcquireWrite, which bleak opens on
+        # the first writable characteristic and closes again. That is the one
+        # the handshake writes to, and BlueZ can keep refusing those writes
+        # with "Write acquired" (#15), so it is the last resort.
+        # HA wraps BleakClient in HaBleakClientWrapper, so reach through to _backend.
+        backend = getattr(self._client, '_backend', self._client)
+        if hasattr(backend, '_acquire_mtu'):
+            try:
+                await backend._acquire_mtu()
+            except Exception:
+                logger.debug("Failed to acquire MTU, using default", exc_info=True)
+        return self._client.mtu_size
 
     async def disconnect(self) -> None:
         """Disconnect from the lock.
