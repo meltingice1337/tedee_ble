@@ -219,3 +219,30 @@ async def test_failed_connect_is_recorded(hass: HomeAssistant, coordinator) -> N
     assert failure["heard_by_any_scanner"] is True
     assert failure["best_connectable_scanner"] == "AA:BB:CC:DD:EE:01"
     assert failure["rssi"] == -78
+
+
+async def test_stale_write_lock_makes_bluez_forget_the_lock(coordinator) -> None:
+    """BlueZ refusing writes with "Write acquired" is cleared by removing the device."""
+    coordinator._transport = MagicMock(forget_device=AsyncMock(return_value=True))
+    with (
+        patch.object(
+            coordinator,
+            "_connect_once",
+            AsyncMock(side_effect=RuntimeError("[org.bluez.Error.NotPermitted] Write acquired")),
+        ),
+        patch.object(coordinator, "_record_connect_failure"),
+        pytest.raises(RuntimeError),
+    ):
+        await coordinator._connect()
+    coordinator._transport.forget_device.assert_awaited_once()
+
+
+async def test_other_connect_errors_keep_the_device(coordinator) -> None:
+    coordinator._transport = MagicMock(forget_device=AsyncMock(return_value=True))
+    with (
+        patch.object(coordinator, "_connect_once", AsyncMock(side_effect=RuntimeError("timeout"))),
+        patch.object(coordinator, "_record_connect_failure"),
+        pytest.raises(RuntimeError),
+    ):
+        await coordinator._connect()
+    coordinator._transport.forget_device.assert_not_awaited()

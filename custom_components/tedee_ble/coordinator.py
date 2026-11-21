@@ -740,7 +740,33 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             await self._connect_once()
         except Exception as err:
             self._record_connect_failure(err)
+            if "Write acquired" in str(err):
+                await self._forget_write_locked_device()
             raise
+
+    async def _forget_write_locked_device(self) -> None:
+        """Clear a write lock BlueZ never released.
+
+        Versions before 0.3.9 asked BlueZ for exclusive write access to learn
+        the MTU. If the link dropped during that call BlueZ kept the lock for
+        good, and it keeps the lock's characteristics between connections, so
+        every later handshake is refused (#15). Removing the device from BlueZ
+        is what frees it; the next advertisement brings the device back.
+        """
+        if self._transport is None:
+            return
+        try:
+            forgotten = await self._transport.forget_device()
+        except Exception:  # noqa: BLE001 - the connect error is what matters
+            logger.debug("Could not make BlueZ forget %s", self.lock_name, exc_info=True)
+            return
+        logger.warning(
+            "BlueZ holds a stale write lock on %s; %s",
+            self.lock_name,
+            "removed the device from BlueZ to clear it"
+            if forgotten
+            else "restart the host if this keeps happening",
+        )
 
     def _record_connect_failure(self, err: Exception) -> None:
         """Note how far a connection attempt got and what Bluetooth offered."""

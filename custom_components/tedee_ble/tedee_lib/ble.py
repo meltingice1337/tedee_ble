@@ -194,6 +194,12 @@ class TedeeBLETransport:
         if was_connected:
             logger.info("Disconnected")
 
+    async def forget_device(self) -> bool:
+        """Make BlueZ drop the lock and all it remembers about it."""
+        if self._client is None or not hasattr(self._client, "clear_cache"):
+            return False
+        return await self._client.clear_cache()
+
     def _on_ptls_tx(self, _sender: int, data: bytearray) -> None:
         """Handle PTLS TX notification (lock -> client, handshake)."""
         logger.debug("PTLS TX: %s", data.hex())
