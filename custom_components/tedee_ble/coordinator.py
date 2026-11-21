@@ -400,14 +400,12 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
                 f"Connection to {self.lock_name} was cancelled (device may be updating)"
             )
         except Exception as err:
+            # Load anyway, with the entities unavailable, and keep trying in
+            # the background. Home Assistant only offers the diagnostics
+            # download for a loaded entry, and an unreachable lock is exactly
+            # when that file is wanted.
             logger.error("Failed to connect to %s: %s", self.lock_name, err)
-            # HA retries setup with a fresh coordinator, so this one must not
-            # keep its firmware poll timer, or a half-open link whose drop
-            # would start it reconnecting in the background.
-            await self.async_shutdown()
-            raise ConfigEntryNotReady(
-                f"Could not connect to {self.lock_name}: {err}"
-            ) from err
+            self._schedule_reconnect()
 
     async def async_shutdown(self) -> None:
         """Shut down the coordinator."""

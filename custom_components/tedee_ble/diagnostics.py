@@ -289,8 +289,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         },
     }
 
-    # Absent while setup is still retrying, which is when this file is most
-    # wanted; the cloud and Bluetooth sections below do not need it.
+    # Absent if setup did not finish; the cloud and Bluetooth sections below
+    # do not need it.
     coordinator = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     if coordinator is not None:
         state = asdict(coordinator.state)

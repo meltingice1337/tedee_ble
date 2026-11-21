@@ -101,8 +101,11 @@ async def test_wait_ignores_replayed_advertisements(coordinator, unseen) -> None
     assert is_fresh(service_info(time=10**9))
 
 
-async def test_failed_setup_shuts_down(hass: HomeAssistant, coordinator) -> None:
-    """A failed first connect leaves no poll timer or reconnect behind."""
+async def test_failed_first_connect_still_loads(hass: HomeAssistant, coordinator) -> None:
+    """An unreachable lock loads unavailable and is retried in the background.
+
+    Home Assistant offers the diagnostics download only for a loaded entry.
+    """
     with (
         patch.object(coordinator, "_refresh_firmware_info_quietly", AsyncMock()),
         patch.object(
@@ -110,7 +113,25 @@ async def test_failed_setup_shuts_down(hass: HomeAssistant, coordinator) -> None
         ),
         patch.object(coordinator, "_schedule_reconnect") as schedule,
     ):
-        with pytest.raises(ConfigEntryNotReady, match="gone"):
+        await coordinator.async_setup()
+        await hass.async_block_till_done()
+
+    schedule.assert_called_once()
+    assert not coordinator.state.available
+    assert not coordinator._shutting_down
+    await coordinator.async_shutdown()
+
+
+async def test_cancelled_setup_shuts_down(hass: HomeAssistant, coordinator) -> None:
+    """A cancelled first connect leaves no poll timer or reconnect behind."""
+    with (
+        patch.object(coordinator, "_refresh_firmware_info_quietly", AsyncMock()),
+        patch.object(
+            coordinator, "_connect", AsyncMock(side_effect=asyncio.CancelledError)
+        ),
+        patch.object(coordinator, "_schedule_reconnect") as schedule,
+    ):
+        with pytest.raises(ConfigEntryNotReady, match="cancelled"):
             await coordinator.async_setup()
         await hass.async_block_till_done()
 
