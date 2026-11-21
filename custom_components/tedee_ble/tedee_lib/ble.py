@@ -5,6 +5,7 @@ import logging
 from typing import Callable
 
 from bleak import BleakClient, BleakScanner
+from bleak.backends.characteristic import BleakGATTCharacteristic
 from bleak.backends.device import BLEDevice
 
 try:
@@ -23,6 +24,11 @@ CHAR_NOTIFICATIONS = "00000101-4899-489f-a301-fbee544b1db0"  # Lock -> Client (N
 CHAR_PTLS_TX = "00000301-4899-489f-a301-fbee544b1db0"       # Lock -> Client (Notify)
 CHAR_PTLS_RX = "00000401-4899-489f-a301-fbee544b1db0"       # Client -> Lock (Write)
 CHAR_API_COMMANDS = "00000501-4899-489f-a301-fbee544b1db0"   # Bidirectional (Indicate)
+
+# How long to wait for BlueZ to report the negotiated MTU, and what to assume
+# if it never does (the size iOS negotiates, which every lock accepts).
+MTU_WAIT = 2.0
+MTU_FALLBACK = 185
 
 
 def serial_to_service_uuid(serial: str) -> str:
@@ -119,23 +125,54 @@ class TedeeBLETransport:
 
     async def _read_mtu(self) -> int:
         """ATT MTU of the connection."""
-        # BlueZ 5.62+ and the ESPHome proxies know the MTU without being asked.
+        # BlueZ 5.62+ and the ESPHome proxies report the MTU on the
+        # characteristic. bleak's copy of it can stay at the default after a
+        # reconnect, so BlueZ is also asked directly, for a short while.
         char = self._client.services.get_characteristic(CHAR_PTLS_RX)
-        if char is not None and char.max_write_without_response_size > 20:
-            return char.max_write_without_response_size + 3
+        if char is not None:
+            deadline = asyncio.get_running_loop().time() + MTU_WAIT
+            while True:
+                size = char.max_write_without_response_size
+                if size > 20:
+                    return size + 3
+                mtu = await self._read_bluez_mtu(char)
+                if mtu > 23:
+                    return mtu
+                if asyncio.get_running_loop().time() >= deadline:
+                    break
+                await asyncio.sleep(0.1)
 
-        # Older BlueZ only tells it through AcquireWrite, which bleak opens on
-        # the first writable characteristic and closes again. That is the one
-        # the handshake writes to, and BlueZ can keep refusing those writes
-        # with "Write acquired" (#15), so it is the last resort.
+        # bleak could ask BlueZ through AcquireWrite, but that locks the
+        # characteristic the handshake writes to and BlueZ may then refuse
+        # those writes with "Write acquired" (#15). Assume a size every lock
+        # connection reaches instead: the hello alone is a 153 byte write.
+        logger.debug("MTU not reported, assuming %d", MTU_FALLBACK)
+        return MTU_FALLBACK
+
+    async def _read_bluez_mtu(self, char: BleakGATTCharacteristic) -> int:
+        """MTU property of a characteristic read straight from BlueZ, 0 if unknown."""
         # HA wraps BleakClient in HaBleakClientWrapper, so reach through to _backend.
         backend = getattr(self._client, '_backend', self._client)
-        if hasattr(backend, '_acquire_mtu'):
-            try:
-                await backend._acquire_mtu()
-            except Exception:
-                logger.debug("Failed to acquire MTU, using default", exc_info=True)
-        return self._client.mtu_size
+        bus = getattr(backend, '_bus', None)
+        if bus is None or not isinstance(char.obj, tuple):
+            return 0
+        try:
+            from dbus_fast import Message
+
+            reply = await bus.call(
+                Message(
+                    destination="org.bluez",
+                    path=char.obj[0],
+                    interface="org.freedesktop.DBus.Properties",
+                    member="Get",
+                    signature="ss",
+                    body=["org.bluez.GattCharacteristic1", "MTU"],
+                )
+            )
+            return int(reply.body[0].value)
+        except Exception:
+            logger.debug("Could not read MTU from BlueZ", exc_info=True)
+            return 0
 
     async def disconnect(self) -> None:
         """Disconnect from the lock.
