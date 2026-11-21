@@ -1506,7 +1506,8 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
         learned = match_activity(observations, activities)
         # The PIN list is complete, so it replaces what was stored; a deleted
         # PIN's number can be handed to someone else. Fingerprints have no
-        # such list and only ever accumulate.
+        # such list, and the lock gives a finger a new number every so often
+        # (#16), so a name is kept only while its number is still in use.
         if pin_list is not None:
             names[METHOD_PIN] = {
                 **learned.get(METHOD_PIN, {}),
@@ -1516,6 +1517,16 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             names[METHOD_PIN].update(learned.get(METHOD_PIN, {}))
         names[METHOD_FINGERPRINT].update(learned.get(METHOD_FINGERPRINT, {}))
         names[METHOD_FINGERPRINT].update(from_cloud.get(METHOD_FINGERPRINT, {}))
+        recent = {
+            str(access_id)
+            for _, method, access_id in observations
+            if method == METHOD_FINGERPRINT
+        }
+        names[METHOD_FINGERPRINT] = {
+            access_id: name
+            for access_id, name in names[METHOD_FINGERPRINT].items()
+            if access_id in recent or access_id in from_cloud.get(METHOD_FINGERPRINT, {})
+        }
         reader = any(t in FINGERPRINT_READER_TYPES for t in accessory_types)
 
         current = self.entry.data
@@ -1532,6 +1543,21 @@ class TedeeCoordinator(DataUpdateCoordinator[TedeeState]):
             "Keypad names refreshed: %d PIN(s), %d fingerprint(s)",
             len(names[METHOD_PIN]), len(names[METHOD_FINGERPRINT]),
         )
+        self._name_last_keypad_use(names)
+
+    def _name_last_keypad_use(self, names: dict[str, dict[str, str]]) -> None:
+        """Put a name learned afterwards on the keypad use still being shown."""
+        if not self._keypad_observations:
+            return
+        _, method, access_id = self._keypad_observations[-1]
+        name = names.get(method, {}).get(str(access_id))
+        if (
+            name
+            and self.state.last_method == method
+            and self.state.last_user == fallback_name(method, access_id)
+        ):
+            self.state.last_user = name
+            self.async_set_updated_data(self.state)
 
     async def _refresh_signed_time(self) -> None:
         """Refresh signed time from cloud API."""

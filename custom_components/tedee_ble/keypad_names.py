@@ -4,9 +4,11 @@ A lock with a keypad reports each use as a trigger plus a small ID
 (issue #16, Keypad PRO):
 
     trigger 0x0A, ID 0..n   - PIN, numbered in the order the PINs were created
-    trigger 0x17, ID n      - fingerprint slot on a Keypad PRO / fingerprint reader
+    trigger 0x17, ID n      - fingerprint on a Keypad PRO / fingerprint reader
 
 The two ID ranges are independent, so a name is looked up by method and ID.
+A PIN keeps its ID. A fingerprint does not: the lock hands the same finger a
+new, higher number every day or so, so its name has to be learned again.
 
 PIN names come from the cloud's PIN list. The cloud has no fingerprint list
 (the app reads it from the keypad over Bluetooth), but its activity log names

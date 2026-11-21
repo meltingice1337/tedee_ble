@@ -190,3 +190,42 @@ async def test_refresh_without_keypad_keeps_names(coordinator) -> None:
     data = coordinator.entry.data
     assert data[CONF_KEYPAD_NAMES][METHOD_PIN] == {"0": "Anna"}
     assert data[CONF_FINGERPRINT_READER] is False
+
+
+async def test_refresh_forgets_fingerprint_numbers_no_longer_seen(
+    hass: HomeAssistant, coordinator
+) -> None:
+    """The lock renumbers fingers (#16), so names of unused numbers are dropped."""
+    hass.config_entries.async_update_entry(
+        coordinator.entry,
+        data={
+            **coordinator.entry.data,
+            CONF_KEYPAD_NAMES: {
+                METHOD_PIN: {"0": "Anna"},
+                METHOD_FINGERPRINT: {"28": "Anna left thumb", "35": "Anna left thumb"},
+            },
+        },
+    )
+    coordinator._keypad_observations.append((T0 - 60, METHOD_FINGERPRINT, 35))
+    coordinator._keypad_observations.append((T0, METHOD_FINGERPRINT, 38))
+    cloud = fake_cloud([10], None, [activity(0.8, 80, "Anna left thumb")])
+
+    with patch(f"{COORD}.TedeeCloudAPI", cloud):
+        await coordinator._refresh_keypad_names()
+
+    assert coordinator.entry.data[CONF_KEYPAD_NAMES] == {
+        METHOD_PIN: {"0": "Anna"},
+        METHOD_FINGERPRINT: {"35": "Anna left thumb", "38": "Anna left thumb"},
+    }
+
+
+async def test_refresh_names_the_use_still_shown(coordinator) -> None:
+    coordinator._keypad_observations.append((T0, METHOD_FINGERPRINT, 28))
+    coordinator.state.last_method = METHOD_FINGERPRINT
+    coordinator.state.last_user = "Fingerprint 28"
+    cloud = fake_cloud([10], None, [activity(0.8, 80, "Anna left thumb")])
+
+    with patch(f"{COORD}.TedeeCloudAPI", cloud):
+        await coordinator._refresh_keypad_names()
+
+    assert coordinator.state.last_user == "Anna left thumb"
